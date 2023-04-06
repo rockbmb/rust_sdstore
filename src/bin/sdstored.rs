@@ -1,13 +1,23 @@
-use rust_sdstore::Config;
+use rust_sdstore;
 
 use std::env;
 use std::process;
 
 fn main() {
-    let config = Config::build(env::args()).unwrap_or_else(|err| {
-        eprintln!("sdstored: Problem parsing arguments: {:?}", err);
+
+    rust_sdstore::util::init_logging_infrastructure(
+        None, 
+        log::LevelFilter::Trace
+    ).unwrap_or_else(|err| {
+        eprintln!("Could not init logging infrastructure! Error: {:?}", err);
+        eprintln!("Exiting");
+        std::process::exit(1);
+    });
+
+    let config = rust_sdstore::Config::build(env::args()).unwrap_or_else(|err| {
+        log::warn!("sdstored: Problem parsing arguments: {:?}", err);
         process::exit(1);
     });
 
-    println!("Read config:\n{:#?}", config);
+    log::info!("Read config:\n{:#?}", config);
 }

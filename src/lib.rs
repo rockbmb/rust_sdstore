@@ -1,5 +1,7 @@
 use std::{fs, io};
 
+pub mod util;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Config {
     nop: usize,
@@ -39,6 +41,7 @@ impl Config {
             let mut words = l.split_whitespace();
             let opt_filter = words.next();
             let opt_count = words.next();
+
             let (filter, count) = match (opt_filter, opt_count) {
                 (_, None) | (None, _) => return Err(ConfigParseError::LineParseError),
                 (Some(filter), Some(count)) => {
@@ -46,7 +49,6 @@ impl Config {
                         Err(_) => return Err(ConfigParseError::FilterLimitParseError(filter.to_string())),
                         Ok(c) => c
                     };
-
                     (filter, count)
                 },
             };
@@ -115,16 +117,19 @@ mod tests {
     #[test]
     fn config_parsing_fails1() {
         let config_txt = "nop 3cccc";
-        let parse_err = ConfigParseError::FilterLimitParseError("nop".to_string());
 
-        assert!(matches!(Config::parse(config_txt).unwrap_err(), parse_err))
+        assert!(
+            matches!(
+                Config::parse(config_txt).unwrap_err(),
+                ConfigParseError::FilterLimitParseError(_)
+            )
+        )
     }
 
     #[test]
     fn config_parsing_fails2() {
         let config_txt = "nop7";
 
-        let parse_err = ConfigParseError::LineParseError;
-        assert!(matches!(Config::parse(config_txt).unwrap_err(), parse_err))
+        assert!(matches!(Config::parse(config_txt).unwrap_err(), ConfigParseError::LineParseError))
     }
 }

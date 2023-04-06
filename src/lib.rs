@@ -1,3 +1,5 @@
+use std::{fs, io};
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Config {
     nop: usize,
@@ -9,10 +11,12 @@ pub struct Config {
     decrypt: usize
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum ConfigParseError {
     LineParseError,
-    FilterLimitParseError(String)
+    FilterLimitParseError(String),
+    NoConfigFileProvided,
+    ConfigFileReadError(io::Error)
 }
 
 impl Config {
@@ -61,6 +65,23 @@ impl Config {
 
         Ok(conf)
     }
+
+    pub fn build(mut args: impl Iterator<Item = String>) -> Result<Config, ConfigParseError> {
+        // Move past executable name in args list
+        args.next();
+
+        let file_path = match args.next() {
+            Some(arg) => arg,
+            None => return Err(ConfigParseError::NoConfigFileProvided),
+        };
+
+        let file = match fs::read_to_string(file_path) {
+            Err(io_err) => return Err(ConfigParseError::ConfigFileReadError(io_err)),
+            Ok(fd) => fd,
+        };
+
+        Config::parse(&file)
+    }
 }
 
 #[cfg(test)]
@@ -94,9 +115,9 @@ mod tests {
     #[test]
     fn config_parsing_fails1() {
         let config_txt = "nop 3cccc";
-        let parse_err = Err(ConfigParseError::FilterLimitParseError("nop".to_string()));
+        let parse_err = ConfigParseError::FilterLimitParseError("nop".to_string());
 
-        assert_eq!(Config::parse(config_txt), parse_err)
+        assert!(matches!(Config::parse(config_txt).unwrap_err(), parse_err))
     }
 
     #[test]
@@ -104,6 +125,6 @@ mod tests {
         let config_txt = "nop7";
 
         let parse_err = ConfigParseError::LineParseError;
-        assert_eq!(Config::parse(config_txt), Err(parse_err))
+        assert!(matches!(Config::parse(config_txt).unwrap_err(), parse_err))
     }
 }

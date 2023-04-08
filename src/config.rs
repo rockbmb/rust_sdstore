@@ -20,7 +20,7 @@ pub enum ConfigParseError {
 }
 
 impl Config {
-    pub fn default() -> Config {
+    pub fn default() -> Self {
         Config {
             nop: 0,
             bcompress: 0,
@@ -32,7 +32,7 @@ impl Config {
         }
     }
 
-    pub fn parse(s: &str) -> Result<Config, ConfigParseError> {
+    pub fn parse(s: &str) -> Result<Self, ConfigParseError> {
         let mut conf = Self::default();
 
         for l in s.lines() {
@@ -66,7 +66,7 @@ impl Config {
         Ok(conf)
     }
 
-    pub fn build(mut args: impl Iterator<Item = String>) -> Result<Config, ConfigParseError> {
+    pub fn build(mut args: impl Iterator<Item = String>) -> Result<Self, ConfigParseError> {
         // Move past executable name in args list
         args.next();
 

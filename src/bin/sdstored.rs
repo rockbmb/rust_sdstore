@@ -15,10 +15,11 @@ fn main() {
         std::process::exit(1);
     });
 
-    let config = config::Config::build(env::args()).unwrap_or_else(|err| {
-        log::error!("Problem parsing config: {:?}", err);
-        process::exit(1);
-    });
+    let config = config::ServerConfig::build(&mut env::args())
+        .unwrap_or_else(|err| {
+            log::error!("Problem parsing config: {:?}", err);
+            process::exit(1);
+        });
     log::info!("Read config:\n{:?}", config);
 
     let udsock_dir = std::env::current_dir().unwrap_or_else(|err| {

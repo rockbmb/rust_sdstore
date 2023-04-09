@@ -2,7 +2,7 @@ use rust_sdstore::*;
 
 use interprocess::os::unix::udsocket;
 
-use std::{env, fs, process};
+use std::{env, process};
 
 fn main() {
     rust_sdstore::util::init_logging_infrastructure(
@@ -53,9 +53,5 @@ fn main() {
     });
     log::info!("sdstore: wrote\n{:?} to UdSocket", request);
 
-
-    fs::remove_file(client_udsock).unwrap_or_else(|err| {
-        log::error!("could not unlink client udsocket. Error: {:?}", err);
-    });
     log::info!("Exiting!");
 }

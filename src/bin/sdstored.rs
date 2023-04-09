@@ -2,7 +2,7 @@ use rust_sdstore::{*, client::ClientRequest};
 
 use interprocess::os::unix::udsocket;
 
-use std::{env, process, str, fs, io};
+use std::{env, process, fs, io};
 
 
 fn main() {

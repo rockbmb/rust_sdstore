@@ -1,8 +1,6 @@
 use crate::client;
 
-use sliding_windows::{Storage, IterExt};
-
-use std::{process::{Command, Stdio}, path::Path, fs, io};
+use std::{process::{Command, Stdio, ExitStatus}, path::Path, fs, io};
 
 #[derive(Debug)]
 pub enum MonitorError {
@@ -10,6 +8,7 @@ pub enum MonitorError {
     InputFileError(io::Error),
     OutputFileError(io::Error),
     FilterFailure(String, io::Error),
+    PipelineFailure(io::Error)
 }
 
 /// Convenience function to report an error during the execution of a
@@ -35,7 +34,10 @@ fn err_msg(
 /// Care is taken to create the necessary output file, and route the child processes'
 /// pipes in the correct order, so that each filter in the pipeline can pipe its output
 /// into the next filter's `STDIN`.
-pub fn start_pipeline_monitor(task: client::Task, transformations_path: &Path) -> Result<(), MonitorError> {
+pub fn start_pipeline_monitor(
+    task: client::Task,
+    transformations_path: &Path
+) -> Result<ExitStatus, MonitorError> {
     let transfs_execs = task.get_transformations()
         .iter()
         .map(|filter| transformations_path.join(filter.to_string()))
@@ -73,36 +75,31 @@ pub fn start_pipeline_monitor(task: client::Task, transformations_path: &Path) -
 /// The `sliding_windows` crate is used to iterate over pairs of commands in
 /// a sliding window across the entire pipeline, arranging the input and output
 /// file descriptors as necessary.
-fn execute_pipeline(transformations: Vec<Command>) -> Result<(), MonitorError> {
-    if transformations.len() > 1 {
-        let mut storage = Storage::new(2);
-        for (ix, mut window) in
-            transformations
-                .into_iter()
-                .sliding_windows(&mut storage)
-                .enumerate()
-        {
-            let mut w = window.iter_mut();
-            let prev_filter = w.next().unwrap();
-            let next_filter = w.next().unwrap();
+fn execute_pipeline(mut transformations: Vec<Command>) -> Result<ExitStatus, MonitorError> {
+    let mut prev_command: Option<&mut Command> = None;
 
-            prev_filter.stdout(Stdio::null());
+    for (ix, curr_filter) in
+        transformations
+            .iter_mut()
+            .enumerate()
+    {
+        if let Some(prev_filter) = prev_command {
             let prev_proc = match prev_filter.spawn() {
-                Err(err) => return Err(err_msg(&prev_filter, 2 * ix, err)),
+                Err(err) => return Err(err_msg(&prev_filter, ix, err)),
                 Ok(res) => res
             };
-
             let prev_stdout = match prev_proc.stdout {
                 None => {
                     let err = io::ErrorKind::NotFound.into();
-                    return Err(err_msg(&prev_filter, 2 * ix, err))
+                    return Err(err_msg(&prev_filter, ix, err))
                 },
                 Some(t) => t
             };
-
-            next_filter.stdin(Stdio::from(prev_stdout));
+            curr_filter.stdin(Stdio::from(prev_stdout));
         }
+
+        prev_command = Some(curr_filter);
     }
 
-    Ok(())
+    prev_command.unwrap().status().map_err(MonitorError::PipelineFailure)
 }

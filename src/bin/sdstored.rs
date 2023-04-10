@@ -64,7 +64,7 @@ fn main() {
                 log::info!("executing request \n{:?}\nfrom UdSocket", task);
                 match monitor::start_pipeline_monitor(task, config.transformations_path()) {
                     Err(err) => log::error!("client request failed with {:?}", err),
-                    Ok(_) => log::info!("client request succeeded."),
+                    Ok(status) => log::info!("client request succeeded with status {:?}", status.success()),
                 };
             }
         }

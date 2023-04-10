@@ -1,4 +1,4 @@
-use rust_sdstore::{server_config, client::ClientRequest, monitor};
+use rust_sdstore::{server, client::ClientRequest, monitor};
 
 use interprocess::os::unix::udsocket;
 
@@ -17,7 +17,7 @@ fn main() {
     });
 
     // Read the server's configs from args: file with max filter definitions, and binary folder path
-    let config = server_config::ServerConfig::build(&mut env::args())
+    let config = server::config::ServerConfig::build(&mut env::args())
         .unwrap_or_else(|err| {
             log::error!("Problem parsing config: {:?}", err);
             process::exit(1);

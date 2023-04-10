@@ -4,15 +4,15 @@ use std::{fs, io, path::{Path, PathBuf}};
 /// the server is permitted to run.
 ///
 /// This is to be read from a file passed to the server executable.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, PartialOrd)]
 pub struct FiltersConfig {
-    nop: usize,
-    bcompress: usize,
-    bdecompress: usize,
-    gcompress: usize,
-    gdecompress: usize,
-    encrypt: usize,
-    decrypt: usize
+    pub nop: usize,
+    pub bcompress: usize,
+    pub bdecompress: usize,
+    pub gcompress: usize,
+    pub gdecompress: usize,
+    pub encrypt: usize,
+    pub decrypt: usize
 }
 
 /// Errors that may happen when parsing a server's filter limits config file.
@@ -42,9 +42,7 @@ impl FiltersConfig {
     /// The file must be composed of lines of ASCII, where each line
     /// is of the form:
     ///
-    /// ```
-    /// <filter-name> <nonnegative-integer>
-    /// ```
+    /// `<filter-name> <nonnegative-integer>`
     pub fn parse(s: &str) -> Result<Self, FilterCfgParseError> {
         let mut conf = Self::default();
 

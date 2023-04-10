@@ -1,4 +1,4 @@
-use rust_sdstore::{*, client::ClientRequest};
+use rust_sdstore::{config, client::ClientRequest, monitor};
 
 use interprocess::os::unix::udsocket;
 
@@ -53,13 +53,21 @@ fn main() {
         });
         if n <= 1 { break }
         let msg = &buf[..n].to_vec();
-
         let request: ClientRequest = bincode::deserialize(msg).unwrap_or_else(|err| {
             log::error!("Could not parse client request. Error: {:?}", err);
             process::exit(1);
         });
 
-        log::info!("read request \n{:?}\nfrom UdSocket", request);
+        match request {
+            ClientRequest::Status => {},
+            ClientRequest::ProcFile(task) => {
+                log::info!("executing request \n{:?}\nfrom UdSocket", task);
+                match monitor::start_pipeline_monitor(task, config.transformations_path()) {
+                    Err(err) => log::error!("client request failed with {:?}", err),
+                    Ok(_) => log::info!("client request succeeded."),
+                };
+            }
+        }
     }
 
     log::info!("Exiting!");

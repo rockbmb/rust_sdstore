@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-use std::{str::FromStr, path::PathBuf, num::ParseIntError};
+use std::{str::FromStr, path::{Path, PathBuf}, num::ParseIntError};
 
 /// Enum representing the kinds of filters a client can request be applied
 /// to a file.
@@ -38,6 +38,20 @@ impl FromStr for Filter {
         };
 
         Ok(res)
+    }
+}
+
+impl ToString for Filter {
+    fn to_string(&self) -> String {
+        match self {
+            Filter::Nop => String::from("nop"),
+            Filter::Bcompress => String::from("bcompress"),
+            Filter::Bdecompress => String::from("bdecompress"),
+            Filter::Gcompress => String::from("gcompress"),
+            Filter::Gdecompress => String::from("gdecompress"),
+            Filter::Encrypt => String::from("encrypt"),
+            Filter::Decrypt => String::from("decrypt"),
+        }
     }
 }
 
@@ -114,6 +128,18 @@ impl Task {
             transformations
         };
         Ok(task)
+    }
+
+    pub fn get_transformations(&self) -> Vec<Filter> {
+        self.transformations.clone()
+    }
+
+    pub fn input_filepath(&self) -> &Path {
+        self.input.as_path()
+    }
+
+    pub fn output_filepath(&self) -> &Path {
+        self.output.as_path()
     }
 }
 

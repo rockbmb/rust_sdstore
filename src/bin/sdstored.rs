@@ -1,4 +1,4 @@
-use rust_sdstore::{config, client::ClientRequest, monitor};
+use rust_sdstore::{server_config, client::ClientRequest, monitor};
 
 use interprocess::os::unix::udsocket;
 
@@ -6,6 +6,7 @@ use std::{env, process, fs, io};
 
 
 fn main() {
+    // Init logging
     rust_sdstore::util::init_logging_infrastructure(
         None, 
         log::LevelFilter::Trace
@@ -15,19 +16,22 @@ fn main() {
         std::process::exit(1);
     });
 
-    let config = config::ServerConfig::build(&mut env::args())
+    // Read the server's configs from args: file with max filter definitions, and binary folder path
+    let config = server_config::ServerConfig::build(&mut env::args())
         .unwrap_or_else(|err| {
             log::error!("Problem parsing config: {:?}", err);
             process::exit(1);
         });
     log::info!("Read config:\n{:?}", config);
 
+    // Init socket file
     let udsock_dir = std::env::current_dir().unwrap_or_else(|err| {
             log::error!("Could not get pwd. Error {:?}", err);
             process::exit(1);
         }).join("tmp");
     log::info!("dir to be used for udsock is {:?}", udsock_dir);
 
+    // Init the Unix domain socket
     let server_udsock = udsock_dir.join("sdstored.sock");
     match fs::remove_file(server_udsock.clone()) {
         Err(ref e) if e.kind() == io::ErrorKind::NotFound => {},
@@ -45,6 +49,7 @@ fn main() {
             });
     log::info!("server listening on Unix datagram socket: {:?}", listener);
 
+    // Loop the processing of clients' requests.
     let mut buf = [0; 1024];
     loop {
         let (n, _) = listener.recv(&mut buf).unwrap_or_else(|err| {

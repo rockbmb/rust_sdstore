@@ -2,12 +2,21 @@ use crate::client;
 
 use std::{process::{Command, Stdio, ExitStatus}, path::Path, fs, io};
 
+/// A selection of the errors a monitor may enconter during a pipeline's execution.
 #[derive(Debug)]
 pub enum MonitorError {
+    /// When executing the pipeline, it had 0 commands. This isn't supposed to happen
+    /// as the server checks this before running a pipeline.
     NoTransformationsGiven,
+    /// A problem opening/reading the input file.
     InputFileError(io::Error),
+    /// A problem creating/opening the output file.
     OutputFileError(io::Error),
+    /// A failure in a given step of the pipeline. The `String` field is the position
+    /// of the offending filter in the list of filters the client requested be executed.
     FilterFailure(String, io::Error),
+    /// A general error may occurrs after `wait`ing for the process responsible for the last
+    /// step in the pipeline to finish.
     PipelineFailure(io::Error)
 }
 

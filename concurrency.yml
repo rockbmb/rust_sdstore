@@ -1,0 +1,10 @@
+name: concurrency
+
+# Resultado esperado: que os três pedidos sejam executados simultaneamente.
+windows:
+  - concurrency_and_limit:
+      panes:
+        - cargo run --bin sdstored config.txt bin/
+        - sleep 1; cargo run --bin sdstore proc-file 1 in/filein1 out/fileout1 bcompress encrypt decrypt bdecompress
+        - sleep 1; cargo run --bin sdstore proc-file 1 in/filein2 out/fileout2 bcompress encrypt decrypt bdecompress
+        - sleep 1; cargo run --bin sdstore proc-file 1 in/filein3 out/fileout3 bcompress encrypt decrypt bdecompress

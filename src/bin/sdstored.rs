@@ -1,8 +1,8 @@
-use rust_sdstore::{server, client::ClientRequest, monitor};
+use std::{env, process, fs, io};
 
 use interprocess::os::unix::udsocket;
 
-use std::{env, process, fs, io};
+use rust_sdstore::{server, client::ClientRequest, monitor};
 
 
 fn main() {
@@ -23,6 +23,8 @@ fn main() {
             process::exit(1);
         });
     log::info!("Read config:\n{:?}", config);
+
+    let mut running = server::limits::RunningFilters::default();
 
     // Init socket file
     let udsock_dir = std::env::current_dir().unwrap_or_else(|err| {
@@ -56,12 +58,12 @@ fn main() {
             log::error!("Could not read from UdSocket. Error: {:?}", err);
             process::exit(1);
         });
-        if n <= 1 { break }
         let msg = &buf[..n].to_vec();
         let request: ClientRequest = bincode::deserialize(msg).unwrap_or_else(|err| {
             log::error!("Could not parse client request. Error: {:?}", err);
             process::exit(1);
         });
+        log::info!("received request: {:?}", request);
 
         match request {
             ClientRequest::Status => {},
@@ -74,6 +76,4 @@ fn main() {
             }
         }
     }
-
-    log::info!("Exiting!");
 }

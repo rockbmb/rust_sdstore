@@ -11,3 +11,4 @@ interprocess = "1.2.1"
 log = "0.4.10"
 serde = {version = "^1.0.63", features = ["derive"]}
 simplelog = { version = "^0.12.0", features = ["paris"] }
+subprocess = "0.2.9"

@@ -1,6 +1,10 @@
+use std::{path::Path, fs::{self, File}, io};
+
+use subprocess::{Exec, Pipeline, PopenError, ExitStatus};
+
 use crate::client;
 
-use std::{process::{Command, Stdio, ExitStatus}, path::Path, fs, io};
+
 
 /// A selection of the errors a monitor may enconter during a pipeline's execution.
 #[derive(Debug)]
@@ -12,15 +16,12 @@ pub enum MonitorError {
     InputFileError(io::Error),
     /// A problem creating/opening the output file.
     OutputFileError(io::Error),
-    /// A failure in a given step of the pipeline. The `String` field is the position
-    /// of the offending filter in the list of filters the client requested be executed.
-    FilterFailure(String, io::Error),
     /// A general error may occurrs after `wait`ing for the process responsible for the last
     /// step in the pipeline to finish.
-    PipelineFailure(io::Error)
+    PipelineFailure(PopenError)
 }
 
-/// Convenience function to report an error during the execution of a
+/* /// Convenience function to report an error during the execution of a
 /// filter pipeline.
 ///
 /// The arguments it receives are:
@@ -33,9 +34,9 @@ fn err_msg(
     ix: usize,
     err: io::Error,
 ) -> MonitorError {
-    let err_msg = format!("filter at position {ix}: {:?}", cmd.get_program().to_os_string());
+    let err_msg = format!("filter at position {ix}: {:?}", cmd.get_program().to_ascii_lowercase());
     MonitorError::FilterFailure(err_msg, err)
-}
+} */
 
 /// Given a client's task and the path to the transformations the server was given
 /// when it began execution, run the tasks to completion.
@@ -67,48 +68,35 @@ pub fn start_pipeline_monitor(
         return Err(MonitorError::NoTransformationsGiven)
     }
 
-    let mut transformations: Vec<Command> = Vec::new();
-    for transformation in transfs_execs.iter() {
-        transformations.push(Command::new(transformation));
+    let mut transformations: Vec<Exec> = Vec::new();
+    for transf in transfs_execs.iter() {
+        transformations.push(Exec::cmd(transf));
     }
-    // The first filter in the pipeline must read from the file in the client's request
-    transformations.first_mut().map(|c| c.stdin(input_fd));
-    // The last filter writes to the created output file.
-    transformations.last_mut().map(|c| c.stdout(output_fd));
 
-    execute_pipeline(transformations)
+    execute_pipeline(transformations, input_fd, output_fd)
 }
 
 /// Helper function for [`start_pipeline_monitor`].
-///
-/// The `sliding_windows` crate is used to iterate over pairs of commands in
-/// a sliding window across the entire pipeline, arranging the input and output
-/// file descriptors as necessary.
-fn execute_pipeline(mut transformations: Vec<Command>) -> Result<ExitStatus, MonitorError> {
-    let mut prev_command: Option<&mut Command> = None;
+fn execute_pipeline(mut transformations: Vec<Exec>, input_fd: File, output_fd: File) -> Result<ExitStatus, MonitorError> {
+    if transformations.len() > 1 {
+        let mut pipeline = Pipeline::from_exec_iter(transformations);
+        // The first filter in the pipeline must read from the file in the client's request
+        pipeline = pipeline.stdin(input_fd);
+        // The last filter writes to the created output file.
+        pipeline = pipeline.stdout(output_fd);
+    
+        pipeline.join().map_err(|err| {
+            MonitorError::PipelineFailure(err)
+        })
+    } else {
+        let mut exec = transformations.remove(0);
+        // The first filter in the pipeline must read from the file in the client's request
+        exec = exec.stdin(input_fd);
+        // The last filter writes to the created output file.
+        exec = exec.stdout(output_fd);
 
-    for (ix, curr_filter) in
-        transformations
-            .iter_mut()
-            .enumerate()
-    {
-        if let Some(prev_filter) = prev_command {
-            let prev_proc = match prev_filter.spawn() {
-                Err(err) => return Err(err_msg(&prev_filter, ix, err)),
-                Ok(res) => res
-            };
-            let prev_stdout = match prev_proc.stdout {
-                None => {
-                    let err = io::ErrorKind::NotFound.into();
-                    return Err(err_msg(&prev_filter, ix, err))
-                },
-                Some(t) => t
-            };
-            curr_filter.stdin(Stdio::from(prev_stdout));
-        }
-
-        prev_command = Some(curr_filter);
+        exec.join().map_err(|err| {
+            MonitorError::PipelineFailure(err)
+        })
     }
-
-    prev_command.unwrap().status().map_err(MonitorError::PipelineFailure)
 }

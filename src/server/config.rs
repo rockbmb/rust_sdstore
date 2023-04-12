@@ -1,4 +1,4 @@
-use std::{fs, io, path::{Path, PathBuf}};
+use std::{fs, io, path::PathBuf};
 
 /// Representation of the maximum allowed concurrent instances of each filter
 /// the server is permitted to run.
@@ -98,8 +98,8 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    pub fn transformations_path(&self) -> &Path {
-        self.transformations_path.as_path()
+    pub fn transformations_path(&self) -> PathBuf {
+        self.transformations_path.clone()
     }
 }
 

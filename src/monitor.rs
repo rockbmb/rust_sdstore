@@ -1,14 +1,24 @@
-use std::{path::Path, fs::{self, File}, io};
+use std::{
+    path::PathBuf, fs::{self, File}, io, thread::{self, Thread, ThreadId},
+};
 
+use serde::{Serialize, Deserialize};
 use subprocess::{Exec, Pipeline, PopenError, ExitStatus};
 
 use crate::client;
 
-
+#[derive(Debug, Serialize, Deserialize)]
+pub enum MonitorMessage {
+    RequestError,
+    Pending,
+    Concluded
+}
 
 /// A selection of the errors a monitor may enconter during a pipeline's execution.
 #[derive(Debug)]
 pub enum MonitorError {
+    /// Problem spawning the thread responsible for the pipeline's execution.
+    ThreadSpawnError(io::Error),
     /// When executing the pipeline, it had 0 commands. This isn't supposed to happen
     /// as the server checks this before running a pipeline.
     NoTransformationsGiven,
@@ -21,22 +31,52 @@ pub enum MonitorError {
     PipelineFailure(PopenError)
 }
 
-/* /// Convenience function to report an error during the execution of a
-/// filter pipeline.
-///
-/// The arguments it receives are:
-/// * `cmd: &Command`: The offending filter
-/// * `ix: usize`: The index of the filter in the task list.
-/// * `err_constructor: impl Fn(&'static str) -> MonitorError`: The `MonitorError`
-///   variant constructor used to wrap the error message
-fn err_msg(
-    cmd: &Command,
-    ix: usize,
-    err: io::Error,
-) -> MonitorError {
-    let err_msg = format!("filter at position {ix}: {:?}", cmd.get_program().to_ascii_lowercase());
-    MonitorError::FilterFailure(err_msg, err)
-} */
+pub struct Monitor {
+    /// Client request a monitor is responsible for
+    task: client::Task,
+    /// Path provided by the server where the monitor may find the binaries
+    /// for transformations
+    transformations_path: PathBuf,
+    /// Thread responsible for executing the pipeline
+    thread: Thread,
+}
+
+/// Result type of a monitor. It'll either return the `ExitStatus` of the 
+/// child (process) that will execute the pipeline in the thread's stead,
+/// or a `MonitorError`.
+pub type MonitorResult = Result<ExitStatus, MonitorError>;
+
+impl Monitor {
+    pub fn build(
+        task: client::Task,
+        transformations_path: PathBuf,
+    ) -> Result<Monitor, MonitorError> {
+        let task_clone = task.clone();
+        let path_clone = transformations_path.clone();
+        let thread = match thread::Builder
+            ::new()
+            .name(format!("Worker-{}", task.client_pid))
+            .spawn(move ||
+                start_pipeline_monitor(
+                    task_clone,
+                    path_clone,
+                ))
+            .map(|handle| handle.thread().clone()) {
+                Err(err) => return Err(MonitorError::ThreadSpawnError(err)),
+                Ok(t) => t
+            };
+
+        Ok(Monitor {
+            task,
+            transformations_path,
+            thread,
+        })
+    }
+
+    pub fn thread_id(&self) -> ThreadId {
+        self.thread.id()
+    }
+}
 
 /// Given a client's task and the path to the transformations the server was given
 /// when it began execution, run the tasks to completion.
@@ -46,7 +86,7 @@ fn err_msg(
 /// into the next filter's `STDIN`.
 pub fn start_pipeline_monitor(
     task: client::Task,
-    transformations_path: &Path
+    transformations_path: PathBuf,
 ) -> Result<ExitStatus, MonitorError> {
     let transfs_execs = task.get_transformations()
         .iter()
@@ -77,26 +117,34 @@ pub fn start_pipeline_monitor(
 }
 
 /// Helper function for [`start_pipeline_monitor`].
-fn execute_pipeline(mut transformations: Vec<Exec>, input_fd: File, output_fd: File) -> Result<ExitStatus, MonitorError> {
-    if transformations.len() > 1 {
+fn execute_pipeline(
+    mut transformations: Vec<Exec>,
+    input_fd: File,
+    output_fd: File,
+) -> Result<ExitStatus, MonitorError> {
+    let result = if transformations.len() == 1 {
+        let mut exec = transformations.remove(0);
+        // The first and only filter in the pipeline must read from the file in the client's request,
+        // and write to the provided file as well.
+        exec = exec.stdin(input_fd);
+        exec = exec.stdout(output_fd);
+        exec.join()
+    } else {
         let mut pipeline = Pipeline::from_exec_iter(transformations);
         // The first filter in the pipeline must read from the file in the client's request
         pipeline = pipeline.stdin(input_fd);
         // The last filter writes to the created output file.
         pipeline = pipeline.stdout(output_fd);
     
-        pipeline.join().map_err(|err| {
-            MonitorError::PipelineFailure(err)
-        })
-    } else {
-        let mut exec = transformations.remove(0);
-        // The first filter in the pipeline must read from the file in the client's request
-        exec = exec.stdin(input_fd);
-        // The last filter writes to the created output file.
-        exec = exec.stdout(output_fd);
+        pipeline.join()
+    }.map_err(|err| { MonitorError::PipelineFailure(err) });
 
-        exec.join().map_err(|err| {
-            MonitorError::PipelineFailure(err)
-        })
+    match &result {
+        Err(_) => {}
+        Ok(ok) => {
+            log::info!("request success: {}", ok.success());
+        }
     }
+
+    result
 }

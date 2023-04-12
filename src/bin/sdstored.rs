@@ -1,9 +1,10 @@
-use std::{env, process, fs, io};
+use std::{
+    env, process, fs, io, sync::Arc
+};
 
 use interprocess::os::unix::udsocket;
 
 use rust_sdstore::{server, client::ClientRequest, monitor};
-
 
 fn main() {
     // Init logging
@@ -23,8 +24,6 @@ fn main() {
             process::exit(1);
         });
     log::info!("Read config:\n{:?}", config);
-
-    let mut running = server::limits::RunningFilters::default();
 
     // Init socket file
     let udsock_dir = std::env::current_dir().unwrap_or_else(|err| {
@@ -50,6 +49,7 @@ fn main() {
                 process::exit(1);
             });
     log::info!("server listening on Unix datagram socket: {:?}", listener);
+    let listener = Arc::new(listener);
 
     // Loop the processing of clients' requests.
     let mut buf = [0; 1024];
@@ -65,13 +65,13 @@ fn main() {
         });
         log::info!("received request: {:?}", request);
 
-        match request {
+        match request.clone() {
             ClientRequest::Status => {},
             ClientRequest::ProcFile(task) => {
                 log::info!("executing request \n{:?}\nfrom UdSocket", task);
-                match monitor::start_pipeline_monitor(task, config.transformations_path()) {
+                match monitor::Monitor::build(task, config.transformations_path()) {
                     Err(err) => log::error!("client request failed with {:?}", err),
-                    Ok(status) => log::info!("client request succeeded with status {:?}", status.success()),
+                    Ok(_) => log::info!("processing client request \n{:?}\n", request)
                 };
             }
         }

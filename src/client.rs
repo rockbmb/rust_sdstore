@@ -12,7 +12,7 @@ use crate::filter::{Filter, FilterParseError};
 /// or has completed.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Task {
-    client_pid: u32,
+    pub client_pid: u32,
     priority: usize,
     input: PathBuf,
     output: PathBuf,
@@ -99,7 +99,7 @@ impl Task {
 ///   and pending requests
 /// * request the processing of a file with a given priority, with the sequence of
 ///   filters listed in the request.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum ClientRequest {
     /// Corresponds to `./sdtore status`
     Status,

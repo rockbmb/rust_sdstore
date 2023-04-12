@@ -2,17 +2,9 @@ use std::{
     path::PathBuf, fs::{self, File}, io, thread::{self, Thread, ThreadId},
 };
 
-use serde::{Serialize, Deserialize};
 use subprocess::{Exec, Pipeline, PopenError, ExitStatus};
 
 use crate::client;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum MonitorMessage {
-    RequestError,
-    Pending,
-    Concluded
-}
 
 /// A selection of the errors a monitor may enconter during a pipeline's execution.
 #[derive(Debug)]

@@ -1,5 +1,5 @@
 use std::{
-    env, process, fs, io, sync::Arc
+    env, process, fs, io
 };
 
 use interprocess::os::unix::udsocket;
@@ -49,7 +49,6 @@ fn main() {
                 process::exit(1);
             });
     log::info!("server listening on Unix datagram socket: {:?}", listener);
-    let listener = Arc::new(listener);
 
     // Loop the processing of clients' requests.
     let mut buf = [0; 1024];

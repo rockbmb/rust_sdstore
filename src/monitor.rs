@@ -79,7 +79,7 @@ impl Monitor {
 pub fn start_pipeline_monitor(
     task: client::Task,
     transformations_path: PathBuf,
-) -> Result<ExitStatus, MonitorError> {
+) -> MonitorResult {
     let transfs_execs = task.get_transformations()
         .iter()
         .map(|filter| transformations_path.join(filter.to_string()))
@@ -92,7 +92,8 @@ pub fn start_pipeline_monitor(
     let output_fd = fs::File::options()
         .read(true)
         .write(true)
-        .create_new(true)
+        .create(true)
+        .truncate(true)
         .open(task.output_filepath())
         .map_err(MonitorError::OutputFileError)?;
 
@@ -113,7 +114,7 @@ fn execute_pipeline(
     mut transformations: Vec<Exec>,
     input_fd: File,
     output_fd: File,
-) -> Result<ExitStatus, MonitorError> {
+) -> MonitorResult {
     let result = if transformations.len() == 1 {
         let mut exec = transformations.remove(0);
         // The first and only filter in the pipeline must read from the file in the client's request,

@@ -10,6 +10,9 @@ use crate::filter::{Filter, FilterParseError};
 /// The PID of the client process is part of this structure since the server must know from
 /// the request came, and to whom send information of when the requested task has begun execution
 /// or has completed.
+///
+/// The `PartialOrd` and `Ord` implementations are needed for insertion into the server's
+/// task priority queue.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Task {
     pub client_pid: u32,
@@ -17,6 +20,17 @@ pub struct Task {
     input: PathBuf,
     output: PathBuf,
     transformations: Vec<Filter>
+}
+impl PartialOrd for Task {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.priority.cmp(&other.priority))
+    }
+}
+
+impl Ord for Task {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.priority.cmp(&other.priority)
+    }
 }
 
 /// When parsing the client's request from the CLI to turn it into a [`Task`], this enum encodes

@@ -1,10 +1,10 @@
 use std::{
-    path::PathBuf, fs::{self, File}, io, thread::{self, Thread, ThreadId},
+    path::PathBuf, fs, io, thread::{self, Thread, ThreadId}, sync::{Arc, mpsc::Sender},
 };
 
 use subprocess::{Exec, Pipeline, PopenError, ExitStatus};
 
-use crate::client;
+use super::{client_task, messaging};
 
 /// A selection of the errors a monitor may enconter during a pipeline's execution.
 #[derive(Debug)]
@@ -20,12 +20,18 @@ pub enum MonitorError {
     OutputFileError(io::Error),
     /// A general error may occurrs after `wait`ing for the process responsible for the last
     /// step in the pipeline to finish.
-    PipelineFailure(PopenError)
+    PipelineFailure(PopenError),
+    /// Failed to inform the server of pipeline completion via the sending end of an `mpsc::channel`
+    MpscSenderError
 }
 
 pub struct Monitor {
-    /// Client request a monitor is responsible for
-    task: client::Task,
+    /// Client request the monitor is responsible for
+    pub task: client_task::ClientTask,
+    /// Numbering of the task, provided by the server. For `Display` purposes.
+    /// Only assigned after the task begins execution, not after the server receives
+    /// and schedules it.
+    task_number: usize,
     /// Path provided by the server where the monitor may find the binaries
     /// for transformations
     transformations_path: PathBuf,
@@ -36,12 +42,14 @@ pub struct Monitor {
 /// Result type of a monitor. It'll either return the `ExitStatus` of the 
 /// child (process) that will execute the pipeline in the thread's stead,
 /// or a `MonitorError`.
-pub type MonitorResult = Result<ExitStatus, MonitorError>;
+pub type MonitorResult = Result<(ThreadId, ExitStatus), MonitorError>;
 
 impl Monitor {
     pub fn build(
-        task: client::Task,
+        task: client_task::ClientTask,
+        task_number: usize,
         transformations_path: PathBuf,
+        sender: Sender<messaging::MessageToServer>
     ) -> Result<Monitor, MonitorError> {
         let task_clone = task.clone();
         let path_clone = transformations_path.clone();
@@ -52,6 +60,7 @@ impl Monitor {
                 start_pipeline_monitor(
                     task_clone,
                     path_clone,
+                    sender
                 ))
             .map(|handle| handle.thread().clone()) {
                 Err(err) => return Err(MonitorError::ThreadSpawnError(err)),
@@ -60,6 +69,7 @@ impl Monitor {
 
         Ok(Monitor {
             task,
+            task_number,
             transformations_path,
             thread,
         })
@@ -76,10 +86,11 @@ impl Monitor {
 /// Care is taken to create the necessary output file, and route the child processes'
 /// pipes in the correct order, so that each filter in the pipeline can pipe its output
 /// into the next filter's `STDIN`.
-pub fn start_pipeline_monitor(
-    task: client::Task,
+fn start_pipeline_monitor(
+    task: client_task::ClientTask,
     transformations_path: PathBuf,
-) -> MonitorResult {
+    sender: Sender<messaging::MessageToServer>
+) -> Result<(), MonitorError> {
     let transfs_execs = task.get_transformations()
         .iter()
         .map(|filter| transformations_path.join(filter.to_string()))
@@ -106,15 +117,6 @@ pub fn start_pipeline_monitor(
         transformations.push(Exec::cmd(transf));
     }
 
-    execute_pipeline(transformations, input_fd, output_fd)
-}
-
-/// Helper function for [`start_pipeline_monitor`].
-fn execute_pipeline(
-    mut transformations: Vec<Exec>,
-    input_fd: File,
-    output_fd: File,
-) -> MonitorResult {
     let result = if transformations.len() == 1 {
         let mut exec = transformations.remove(0);
         // The first and only filter in the pipeline must read from the file in the client's request,
@@ -130,14 +132,10 @@ fn execute_pipeline(
         pipeline = pipeline.stdout(output_fd);
     
         pipeline.join()
-    }.map_err(|err| { MonitorError::PipelineFailure(err) });
-
-    match &result {
-        Err(_) => {}
-        Ok(ok) => {
-            log::info!("request success: {}", ok.success());
-        }
     }
+    .map_err(|err| { MonitorError::PipelineFailure(err) })
+    .map(|status| (thread::current().id(), status));
+    let result = messaging::MessageToServer::Monitor(result);
 
-    result
+    sender.send(result).map_err(|_| MonitorError::MpscSenderError)
 }

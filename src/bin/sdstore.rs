@@ -1,4 +1,4 @@
-use rust_sdstore::*;
+use rust_sdstore::core::messaging;
 
 use interprocess::os::unix::udsocket;
 
@@ -36,7 +36,7 @@ fn main() {
     });
 
     let request =
-        client::ClientRequest::build(env::args(), client_pid)
+        messaging::ClientRequest::build(env::args(), client_pid)
             .unwrap_or_else(|err| {
                 log::error!("Could not parse request from arguments. Error: {:?}", err);
                 process::exit(1);

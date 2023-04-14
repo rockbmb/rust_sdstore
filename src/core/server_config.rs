@@ -93,7 +93,7 @@ impl FiltersConfig {
 /// Full configuration for a server: filters, and path to filter executables.
 #[derive(Debug)]
 pub struct ServerConfig {
-    filters_config: FiltersConfig,
+    pub filters_config: FiltersConfig,
     transformations_path: PathBuf
 }
 

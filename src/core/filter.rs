@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{hash::Hash, str::FromStr};
 
 use serde::{Serialize, Deserialize};
 
@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 ///
 /// For each of these variants, there will be a corresponding `.c` source and
 /// executable in the `bin/` folder, in the root of this project.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Hash)]
 pub enum Filter {
     Nop,
     Bcompress,

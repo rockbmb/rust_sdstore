@@ -1,109 +1,40 @@
-use std::{path::{Path, PathBuf}, num::ParseIntError, str::FromStr};
+use std::fmt::Display;
 
 use serde::{Serialize, Deserialize};
 
-use crate::filter::{Filter, FilterParseError};
+use super::{
+    client_task::{ClientTask, TaskParseError},
+    monitor::MonitorResult
+};
 
-/// This `struct` represents a request, to the `sdstore` server, to apply a sequence
-/// of filters to the input file, thereby producing the output at the specified location.
-///
-/// The PID of the client process is part of this structure since the server must know from
-/// the request came, and to whom send information of when the requested task has begun execution
-/// or has completed.
-///
-/// The `PartialOrd` and `Ord` implementations are needed for insertion into the server's
-/// task priority queue.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-pub struct Task {
-    pub client_pid: u32,
-    priority: usize,
-    input: PathBuf,
-    output: PathBuf,
-    transformations: Vec<Filter>
-}
-impl PartialOrd for Task {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.priority.cmp(&other.priority))
-    }
+/// Messages sent by the server to each client to inform it of the stage
+/// at which its request is.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum MessageToClient {
+    /// The request could not be started, or could, but failed partway.
+    RequestError,
+    /// The request has been received, and is pending processing.
+    Pending,
+    /// The request has been assigned to a `Monitor`, as has begun processing
+    Processing,
+    /// The request was sucessfully completed 
+    Concluded
 }
 
-impl Ord for Task {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.priority.cmp(&other.priority)
-    }
-}
-
-/// When parsing the client's request from the CLI to turn it into a [`Task`], this enum encodes
-/// the errors that may occur.
-#[derive(Debug, PartialEq, Eq)]
-pub enum TaskParseError {
-    InvalidPriority(ParseIntError),
-    NoPriorityProvided,
-    InvalidInputOutputPaths,
-    NoFiltersProvided,
-    InvalidFilterProvided(FilterParseError)
-}
-
-impl Task {
-    /// Build a [`Task`] from `main`'s `args` iterator, parsing the user's input
-    /// to construct a request to the server.
-    ///
-    /// This method is meant to be called from the homologous [`ClientRequest`]
-    /// method, and not by itself.
-    pub fn build(
-        mut args: impl Iterator<Item = String>,
-        client_pid: u32
-    ) -> Result<Self, TaskParseError> {
-        // A task is only ever parsed from the CLI as part of a client
-        // request, so the `args` iterator here has already been moved to
-        // the priority section of the request.
-
-        let priority: usize = match args.next() {
-            None => return Err(TaskParseError::NoPriorityProvided),
-            Some(prio) => {
-                match prio.trim().parse() {
-                    Err(err) => return Err(TaskParseError::InvalidPriority(err)),
-                    Ok(p) => p
-                }
-            }
-        };
-
-        let (input, output) = match (args.next(), args.next()) {
-            (None, _) | (_, None) => return Err(TaskParseError::InvalidInputOutputPaths),
-            (Some(input_path), Some(output_path)) =>
-                (PathBuf::from(input_path), PathBuf::from(output_path))
-        };
-
-        let mut transformations: Vec<Filter> = Vec::new();
-        for filter in args {
-            match Filter::from_str(filter.as_str()) {
-                Err(err) => return Err(TaskParseError::InvalidFilterProvided(err)),
-                Ok(f) => transformations.push(f),
-            }
+impl Display for MessageToClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Self::RequestError => write!(f, "the request failed. check server logs for information"),
+            Self::Pending      => write!(f, "pending"),
+            Self::Processing   => write!(f, "processing"),
+            Self::Concluded    => write!(f, "concluded"),
         }
-        if transformations.is_empty() { return Err(TaskParseError::NoFiltersProvided) }
-
-        let task = Task {
-            client_pid,
-            priority,
-            input,
-            output,
-            transformations
-        };
-        Ok(task)
     }
+}
 
-    pub fn get_transformations(&self) -> Vec<Filter> {
-        self.transformations.clone()
-    }
-
-    pub fn input_filepath(&self) -> &Path {
-        self.input.as_path()
-    }
-
-    pub fn output_filepath(&self) -> &Path {
-        self.output.as_path()
-    }
+pub enum MessageToServer {
+    Client(ClientRequest),
+    Monitor(MonitorResult)
 }
 
 /// The kinds of requests a client may make to the server.
@@ -118,7 +49,7 @@ pub enum ClientRequest {
     /// Corresponds to `./sdtore status`
     Status,
     /// Corresponds to `./sdstore proc-file <priority> <input-file> <output-file> [filters]`
-    ProcFile(Task)
+    ProcFile(ClientTask)
 }
 
 /// Enum for errors that may occur while parsing the client's request from the CLI.
@@ -147,7 +78,7 @@ impl ClientRequest {
             _  => return Err(ClientReqParseError::IncorrectCommandProvided),
         };
 
-        let task = match Task::build(args, client_pid) {
+        let task = match ClientTask::build(args, client_pid) {
             Err(err) => return Err(ClientReqParseError::TaskParseError(err)),
             Ok(t) => t,
         };
@@ -158,37 +89,9 @@ impl ClientRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::PathBuf;
 
-    #[test]
-    fn filter_parsing_works() {
-        let str_filters = vec![
-            "nop", "bcompress", "bdecompress", "gcompress", "gdecompress", "encrypt", "decrypt"
-        ];
-        let expected = vec![
-            Filter::Nop ,Filter::Bcompress, Filter::Bdecompress, Filter::Gcompress,
-            Filter::Gdecompress, Filter::Encrypt, Filter::Decrypt
-        ];
-
-        let actual = str_filters
-            .into_iter()
-            .map(Filter::from_str)
-            .map(Result::unwrap)
-            .collect::<Vec<_>>();
-
-        for (expected, actual) in expected.into_iter().zip(actual.into_iter()) {
-            assert_eq!(expected, actual);
-        }
-    }
-
-    #[test]
-    fn filter_parsing_fails() {
-        let str = "bcompres";
-        let expected = FilterParseError("bcompres".to_string());
-        let actual = Filter::from_str(str).unwrap_err();
-
-        assert_eq!(expected, actual);
-    }
+    use crate::core::{filter::{Filter, FilterParseError}, client_task::{ClientTask, TaskParseError}, messaging::{ClientRequest, ClientReqParseError}};
 
     #[test]
     fn task_parsing_works() {
@@ -201,18 +104,18 @@ mod tests {
             .map(str::to_string);
         // Move past executable name, and command type
 
-        let task = Task {
-            client_pid : 0,
-            priority : 5,
-            input : PathBuf::from("samples/file-a"),
-            output : PathBuf::from("outputs/file-a-output"),
-            transformations : vec![Filter::Bcompress, Filter::Nop, Filter::Gcompress, Filter::Encrypt, Filter::Nop]
-        };
+        let task = ClientTask::new(
+            0,
+            5,
+            PathBuf::from("samples/file-a"),
+            PathBuf::from("outputs/file-a-output"),
+            vec![Filter::Bcompress, Filter::Nop, Filter::Gcompress, Filter::Encrypt, Filter::Nop]
+        );
 
         let mut args1 = args.clone();
         args1.next();
         args1.next();
-        assert_eq!(Task::build(args1, 0).unwrap(), task);
+        assert_eq!(ClientTask::build(args1, 0).unwrap(), task);
 
         let client_req = ClientRequest::ProcFile(task);
         assert_eq!(ClientRequest::build(args, 0).unwrap(), client_req);

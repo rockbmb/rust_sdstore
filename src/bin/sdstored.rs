@@ -36,6 +36,24 @@ fn queue_task(task_pqueue: &mut PriorityQueue<ClientTask, usize>, task: ClientTa
     task_pqueue.push(task, prio);
 }
 
+fn accept_task(
+    task_pqueue: &mut PriorityQueue<ClientTask, usize>,
+    listener: &Arc<UdSocket>,
+    client_udsock_path: &Path,
+    task: ClientTask
+) -> io::Result<usize> {
+    let client_pid = task.client_pid;
+    queue_task(task_pqueue, task);
+
+    listener
+    .set_destination(client_udsock_path
+    .join(String::from("_") + &client_pid.to_string()))?;
+    let msg_to_client = MessageToClient::Pending;
+
+    let bytes = bincode::serialize(&msg_to_client).unwrap();
+    listener.send(&bytes)
+}
+
 fn sunset_task(
     thread_id: ThreadId,
     running_tasks: &mut HashMap<ThreadId, Monitor>
@@ -184,7 +202,15 @@ fn main() {
             messaging::MessageToServer::Client(req) => {
                 match req {
                     messaging::ClientRequest::Status => {},
-                    messaging::ClientRequest::ProcFile(task) => queue_task(&mut task_pqueue, task),
+                    messaging::ClientRequest::ProcFile(task) => {
+                        // TODO: handle this unwrap
+                        accept_task(
+                            &mut task_pqueue,
+                            &listener,
+                            &udsock_dir,
+                            task,
+                            ).unwrap();
+                    },
                 }
             }
             messaging::MessageToServer::Monitor(res) => {

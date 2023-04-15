@@ -1,8 +1,6 @@
 use rust_sdstore::core::messaging::{self, MessageToClient};
 
-use interprocess::os::unix::udsocket;
-
-use std::{env, process};
+use std::{env, process, os::unix::net::UnixDatagram};
 
 fn main() {
     rust_sdstore::util::init_logging_infrastructure(
@@ -23,17 +21,13 @@ fn main() {
     log::info!("dir to be used for udsock is {:?}", udsock_dir);
 
     let client_udsock = udsock_dir.join(format!("sdstore_{}.sock", client_pid));
-    let listener = udsocket::UdSocket::bind_with_drop_guard(client_udsock.as_path()).unwrap_or_else(|err| {
+    let listener = UnixDatagram::bind(client_udsock.as_path()).unwrap_or_else(|err| {
         log::error!("sdstored: Could not create listener on socket. Error: {:?}", err);
         process::exit(1);
     });
     log::info!("client listening on Unix datagram socket: {:?}", listener);
 
     let server_udsock = udsock_dir.join("sdstored.sock");
-    listener.set_destination(server_udsock.as_path()).unwrap_or_else(|err| {
-        log::error!("sdstore: error setting client socket destination. Error: {:?}", err);
-        process::exit(1);
-    });
 
     let request =
         messaging::ClientRequest::build(env::args(), client_pid)
@@ -47,7 +41,7 @@ fn main() {
             log::error!("Could not serialize request. Error: {:?}", err);
             process::exit(1);
         });
-    listener.send(msg.as_slice()).unwrap_or_else(|err| {
+    listener.send_to(msg.as_slice(), server_udsock).unwrap_or_else(|err| {
         log::error!("sdstored: Could not send to UdSocket. Error: {:?}", err);
         process::exit(1);
     });
@@ -55,7 +49,7 @@ fn main() {
 
     let mut buf = [0; 64];
     loop {
-        let (n, _) = listener.recv(&mut buf).unwrap_or_else(|err| {
+        let n = listener.recv(&mut buf).unwrap_or_else(|err| {
             log::error!("Could not read from UdSocket. Error: {:?}", err);
             process::exit(1);
         });

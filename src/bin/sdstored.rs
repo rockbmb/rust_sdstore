@@ -1,10 +1,10 @@
 use std::{
     collections::HashMap,
     env, process, fs, io, sync::{mpsc::{self, Sender}, Arc},
-    thread::{ThreadId, self}, path::Path, ops::{SubAssign, AddAssign},
+    thread::{ThreadId, self}, path::{Path, PathBuf}, ops::{SubAssign, AddAssign},
+    os::unix::net::UnixDatagram
 };
 
-use interprocess::os::unix::udsocket::{self, UdSocket};
 use priority_queue::PriorityQueue;
 
 use rust_sdstore::{
@@ -16,11 +16,11 @@ use rust_sdstore::{
     }
 };
 
-fn udsock_listen(listener: Arc<UdSocket>, sender: mpsc::Sender<messaging::MessageToServer>) {
+fn udsock_listen(listener: Arc<UnixDatagram>, sender: mpsc::Sender<messaging::MessageToServer>) {
     // Loop the processing of clients' requests.
     let mut buf = [0; 1024];
     loop {
-        let (n, _) = listener.recv(&mut buf).unwrap_or_else(|err| {
+        let n = listener.recv(&mut buf).unwrap_or_else(|err| {
             log::error!("Could not read from UdSocket. Error: {:?}", err);
             process::exit(1);
         });
@@ -39,20 +39,20 @@ fn queue_task(task_pqueue: &mut PriorityQueue<ClientTask, usize>, task: ClientTa
 
 fn accept_task(
     task_pqueue: &mut PriorityQueue<ClientTask, usize>,
-    listener: &Arc<UdSocket>,
+    listener: &Arc<UnixDatagram>,
     client_udsock_path: &Path,
     task: ClientTask
 ) -> io::Result<usize> {
     let client_pid = task.client_pid;
     queue_task(task_pqueue, task);
 
-    listener
-        .set_destination(client_udsock_path.join(
-            String::from("sdstore_") + &client_pid.to_string() + &".sock"))?;
+    let destination = client_udsock_path.join(
+            String::from("sdstore_") + &client_pid.to_string() + &".sock"
+    );
     let msg_to_client = MessageToClient::Pending;
 
     let bytes = bincode::serialize(&msg_to_client).unwrap();
-    listener.send(&bytes)
+    listener.send_to(&bytes, destination)
 }
 
 fn sunset_task(
@@ -66,8 +66,10 @@ fn process_task_result(
     result: MonitorResult,
     running_tasks: &mut HashMap<ThreadId, Monitor>,
     filters_count: &mut RunningFilters,
-    listener: &Arc<UdSocket>,
+    listener: &Arc<UnixDatagram>,
     client_udsock_path: &Path) -> io::Result<usize> {
+        let mut destination: Option<PathBuf> = None;
+
         let msg_to_client = match result {
             Err(_) => MessageToClient::RequestError,
             Ok((thread_id, exit_status)) => {
@@ -75,9 +77,9 @@ fn process_task_result(
                     // Deduct the completed tasks' filter counts from the server's.
                     filters_count.sub_assign(&monitor.task.get_transformations());
 
-                    listener
-                        .set_destination(client_udsock_path
-                        .join(String::from("sdstore_") + &monitor.task.client_pid.to_string() + &".sock"))?;
+                    destination = Some(client_udsock_path
+                        .join(String::from("sdstore_") + &monitor.task.client_pid.to_string() + &".sock"
+                    ));
                     if exit_status.success() {
                         MessageToClient::Concluded
                     } else {
@@ -93,9 +95,14 @@ fn process_task_result(
             }
         };
 
-        // TODO: this unwrap can be handled, at the expense of quite a bit of additional code
-        let bytes = bincode::serialize(&msg_to_client).unwrap();
-        listener.send(&bytes)
+        match destination {
+            Some(dest) => {
+                // TODO: this unwrap can be handled, at the expense of quite a bit of additional code
+                let bytes = bincode::serialize(&msg_to_client).unwrap();
+                listener.send_to(&bytes, dest)
+            },
+            _ => {todo!()}
+        }
 }
 
 fn task_steal(
@@ -105,7 +112,7 @@ fn task_steal(
     server_config: &ServerConfig,
     task_counter: &mut usize,
     sender: Sender<messaging::MessageToServer>,
-    listener: &Arc<UdSocket>,
+    listener: &Arc<UnixDatagram>,
     client_udsock_path: &Path
 ) {
     while let Some((task, _)) = task_pqueue.peek() {
@@ -115,14 +122,14 @@ fn task_steal(
             let (task, _) = task_pqueue.pop().unwrap();
 
             // TODO: Handle this unwrap
-            listener
-                .set_destination(client_udsock_path
-                .join(String::from("sdstore_") + &task.client_pid.to_string() + &".sock")).unwrap();
+            let destination = client_udsock_path
+                .join(String::from("sdstore_") + &task.client_pid.to_string() + &".sock"
+            );
             let msg_to_client = MessageToClient::Processing;
         
             let bytes = bincode::serialize(&msg_to_client).unwrap();
             // TODO: handle this unwrap
-            listener.send(&bytes).unwrap();
+            listener.send_to(&bytes, destination).unwrap();
 
             // update server's limits with new task's counts.
             filters_count.add_assign(&task.transformations);
@@ -180,7 +187,7 @@ fn main() {
         Ok(_) => {}
     };
     let listener =
-        udsocket::UdSocket::bind_with_drop_guard(server_udsock.as_path())
+        UnixDatagram::bind(server_udsock.as_path())
             .unwrap_or_else(|err| {
                 log::error!("Could not create listener on socket. Error: {:?}", err);
                 process::exit(1);

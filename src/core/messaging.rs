@@ -9,7 +9,7 @@ use super::{
 
 /// Messages sent by the server to each client to inform it of the stage
 /// at which its request is.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum MessageToClient {
     /// The request could not be started, or could, but failed partway.
     RequestError,

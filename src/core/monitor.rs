@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf, fs, io, thread::{self, Thread, ThreadId}, sync::{Arc, mpsc::Sender},
+    path::PathBuf, fs, io, thread::{self, Thread, ThreadId}, sync::mpsc::Sender,
 };
 
 use subprocess::{Exec, Pipeline, PopenError, ExitStatus};

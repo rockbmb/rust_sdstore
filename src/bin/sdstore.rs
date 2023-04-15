@@ -1,4 +1,4 @@
-use rust_sdstore::core::messaging;
+use rust_sdstore::core::messaging::{self, MessageToClient};
 
 use interprocess::os::unix::udsocket;
 
@@ -53,5 +53,20 @@ fn main() {
     });
     log::info!("sdstore: wrote\n{:?} to UdSocket", request);
 
+    let mut buf = [0; 64];
+    loop {
+        let (n, _) = listener.recv(&mut buf).unwrap_or_else(|err| {
+            log::error!("Could not read from UdSocket. Error: {:?}", err);
+            process::exit(1);
+        });
+        // TODO: handle this unwrap
+        let msg: MessageToClient = bincode::deserialize(&buf[..n]).unwrap();
+        log::info!("{msg}");
+
+        if msg == MessageToClient::Concluded || msg == MessageToClient::RequestError { break }
+    }
+
     log::info!("Exiting!");
+
+    drop(listener);
 }

@@ -10,9 +10,9 @@ use priority_queue::PriorityQueue;
 use rust_sdstore::{
     core::{
         messaging::ClientRequest,
-        server_config::{self, FiltersConfig, ServerConfig}, limits::{self, RunningFilters},
+        server_config::{self, ServerConfig}, limits::{self, RunningFilters},
         client_task::ClientTask,
-        monitor::{Monitor, MonitorResult, MonitorError}, messaging::{self, MessageToClient}
+        monitor::{Monitor, MonitorResult}, messaging::{self, MessageToClient}
     }
 };
 
@@ -24,6 +24,7 @@ fn udsock_listen(listener: Arc<UdSocket>, sender: mpsc::Sender<messaging::Messag
             log::error!("Could not read from UdSocket. Error: {:?}", err);
             process::exit(1);
         });
+        // TODO: handle this unwrap
         let request: ClientRequest = bincode::deserialize(&buf[..n]).unwrap();
 
         // TODO: this unwrap needs to be handled
@@ -46,8 +47,8 @@ fn accept_task(
     queue_task(task_pqueue, task);
 
     listener
-    .set_destination(client_udsock_path
-    .join(String::from("_") + &client_pid.to_string()))?;
+        .set_destination(client_udsock_path.join(
+            String::from("sdstore_") + &client_pid.to_string() + &".sock"))?;
     let msg_to_client = MessageToClient::Pending;
 
     let bytes = bincode::serialize(&msg_to_client).unwrap();
@@ -76,7 +77,7 @@ fn process_task_result(
 
                     listener
                         .set_destination(client_udsock_path
-                        .join(String::from("_") + &monitor.task.client_pid.to_string()))?;
+                        .join(String::from("sdstore_") + &monitor.task.client_pid.to_string() + &".sock"))?;
                     if exit_status.success() {
                         MessageToClient::Concluded
                     } else {
@@ -103,11 +104,26 @@ fn task_steal(
     running_tasks: &mut HashMap<ThreadId, Monitor>,
     server_config: &ServerConfig,
     task_counter: &mut usize,
-    sender: Sender<messaging::MessageToServer>
+    sender: Sender<messaging::MessageToServer>,
+    listener: &Arc<UdSocket>,
+    client_udsock_path: &Path
 ) {
     while let Some((task, _)) = task_pqueue.peek() {
         if filters_count.can_run_pipeline(&server_config.filters_config, &task.transformations) {
+            // Since the loop is only entered if the queue's highest priority element can be
+            //peeked into, this unwrap is safe.
             let (task, _) = task_pqueue.pop().unwrap();
+
+            // TODO: Handle this unwrap
+            listener
+                .set_destination(client_udsock_path
+                .join(String::from("sdstore_") + &task.client_pid.to_string() + &".sock")).unwrap();
+            let msg_to_client = MessageToClient::Processing;
+        
+            let bytes = bincode::serialize(&msg_to_client).unwrap();
+            // TODO: handle this unwrap
+            listener.send(&bytes).unwrap();
+
             // update server's limits with new task's counts.
             filters_count.add_assign(&task.transformations);
 
@@ -234,7 +250,9 @@ fn main() {
         &mut running_tasks,
         &config,
         &mut counter,
-        sender_clone)
+        sender_clone,
+        &listener,
+        &udsock_dir)
 
     }
 }

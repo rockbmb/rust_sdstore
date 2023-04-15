@@ -1,6 +1,6 @@
 use rust_sdstore::core::messaging::{self, MessageToClient};
 
-use std::{env, process, os::unix::net::UnixDatagram};
+use std::{env, process, os::unix::net::UnixDatagram, fs};
 
 fn main() {
     rust_sdstore::util::init_logging_infrastructure(
@@ -48,19 +48,37 @@ fn main() {
     log::info!("sdstore: wrote\n{:?} to UdSocket", request);
 
     let mut buf = [0; 64];
+    // TODO:
+    // This loop only breaks if the client receives an error from the socket, or
+    // its request is concluded.
+    //
+    // Otherwise, it'll hang forever. This can be fixed with a timeout thread.
     loop {
         let n = listener.recv(&mut buf).unwrap_or_else(|err| {
             log::error!("Could not read from UdSocket. Error: {:?}", err);
             process::exit(1);
         });
-        // TODO: handle this unwrap
-        let msg: MessageToClient = bincode::deserialize(&buf[..n]).unwrap();
+        let msg: MessageToClient = match bincode::deserialize(&buf[..n]) {
+            Err(err) => {
+                log::warn!("Error deserializing message from socket: {:?}", err);
+                log::warn!("Moving on to next message");
+                break;
+            },
+            Ok(val) => val,
+        };
         log::info!("{msg}");
 
         if msg == MessageToClient::Concluded || msg == MessageToClient::RequestError { break }
     }
 
     log::info!("Exiting!");
-
     drop(listener);
+    // TODO If the client receives e.g. `SIGKILL` while waiting for a message, the socket file
+    // will not be deleted.
+    //
+    // this can be fixed with the `signal_hook` crate, enabling us to install signal handlers.
+    fs::remove_file(client_udsock).unwrap_or_else(|err| {
+        log::error!("Error deleting client udsocket file: {:?}", err);
+        process::exit(1);
+    });
 }

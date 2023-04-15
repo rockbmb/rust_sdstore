@@ -32,9 +32,6 @@ pub struct Monitor {
     /// Only assigned after the task begins execution, not after the server receives
     /// and schedules it.
     task_number: usize,
-    /// Path provided by the server where the monitor may find the binaries
-    /// for transformations
-    transformations_path: PathBuf,
     /// Thread responsible for executing the pipeline
     thread: Thread,
 }
@@ -70,7 +67,6 @@ impl Monitor {
         Ok(Monitor {
             task,
             task_number,
-            transformations_path,
             thread,
         })
     }

@@ -1,7 +1,7 @@
 use std::ops::{Add, AddAssign, SubAssign};
 
 use super::filter::Filter;
-use super::server_config::FiltersConfig;
+use super::server::config::FiltersConfig;
 
 pub type RunningFilters = FiltersConfig;
 

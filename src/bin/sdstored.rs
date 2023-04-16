@@ -10,7 +10,7 @@ use priority_queue::PriorityQueue;
 use rust_sdstore::{
     core::{
         messaging::ClientRequest,
-        server_config::{self, ServerConfig}, limits::{self, RunningFilters},
+        server::config::{self, ServerConfig}, limits::{self, RunningFilters},
         client_task::ClientTask,
         monitor::{Monitor, MonitorResult}, messaging::{self, MessageToClient}
     }
@@ -32,11 +32,13 @@ fn udsock_listen(listener: Arc<UnixDatagram>, sender: mpsc::Sender<messaging::Me
     }
 }
 
+// done
 fn queue_task(task_pqueue: &mut PriorityQueue<ClientTask, usize>, task: ClientTask) {
     let prio = task.priority;
     task_pqueue.push(task, prio);
 }
 
+// done
 fn accept_task(
     task_pqueue: &mut PriorityQueue<ClientTask, usize>,
     listener: &Arc<UnixDatagram>,
@@ -55,6 +57,7 @@ fn accept_task(
     listener.send_to(&bytes, destination)
 }
 
+// done
 fn sunset_task(
     thread_id: ThreadId,
     running_tasks: &mut HashMap<ThreadId, Monitor>
@@ -62,6 +65,7 @@ fn sunset_task(
     running_tasks.remove(&thread_id)
 }
 
+// done
 fn process_task_result(
     result: MonitorResult,
     running_tasks: &mut HashMap<ThreadId, Monitor>,
@@ -161,7 +165,7 @@ fn main() {
     });
 
     // Read the server's configs from args: file with max filter definitions, and binary folder path
-    let config = server_config::ServerConfig::build(&mut env::args())
+    let config = config::ServerConfig::build(&mut env::args())
         .unwrap_or_else(|err| {
             log::error!("Problem parsing config: {:?}", err);
             process::exit(1);

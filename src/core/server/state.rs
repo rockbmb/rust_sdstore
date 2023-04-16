@@ -1,12 +1,14 @@
 use std::{
     collections::HashMap, thread::{self, ThreadId, JoinHandle}, io,
     sync::{mpsc::{Receiver, Sender, self}, Arc},
-    os::unix::net::UnixDatagram, path::PathBuf, ops::SubAssign,
+    os::unix::net::UnixDatagram, path::PathBuf, ops::{SubAssign, AddAssign},
 };
 
 use priority_queue::PriorityQueue;
 
 use crate::core::{client_task::ClientTask, limits::{RunningFilters}, monitor::{Monitor, MonitorResult}, messaging::{self, MessageToClient}};
+
+use super::config::ServerConfig;
 
 pub type UdSocketClosure = Box<dyn FnOnce() -> () + Send + 'static>;
 
@@ -24,7 +26,7 @@ pub struct ServerState {
     running_tasks: HashMap<ThreadId, Monitor>,
 
     sender: Sender<messaging::MessageToServer>,
-    receiver: Receiver<messaging::MessageToServer>,
+    pub receiver: Receiver<messaging::MessageToServer>,
 
     udsocket: Arc<UnixDatagram>,
     udsock_mngr: Option<JoinHandle<UdSocketClosure>>,
@@ -42,10 +44,18 @@ impl ServerState {
         Arc::clone(&self.udsocket)
     }
 
-    pub fn get_sender(&self) -> &Sender<messaging::MessageToServer> {
-        &self.sender
+    pub fn get_sender(&self) -> Sender<messaging::MessageToServer> {
+        self.sender.clone()
     }
 
+    pub fn get_incr_task_counter(&mut self) -> usize {
+        let res = self.task_counter;
+        self.task_counter += 1;
+        res
+    }
+
+    /// Create a new instance of `ServerState`, assuming an initialized `UnixDatagram`,
+    /// but creating new inter-thread `mpsc::channel`s.
     pub fn new(udsocket: UnixDatagram, udsock_dir: PathBuf) -> Self {
         let (
             sender,
@@ -79,7 +89,7 @@ impl ServerState {
         Ok(())
     }
 
-    pub fn accept_task(&mut self, task: ClientTask) -> io::Result<usize> {
+    pub fn receive_task(&mut self, task: ClientTask) -> io::Result<usize> {
         let client_pid = task.client_pid;
         let prio = task.priority;
         self.task_pqueue.push(task, prio);
@@ -93,7 +103,7 @@ impl ServerState {
         self.udsocket.send_to(&bytes, destination)
     }
 
-    pub fn process_task_result(&mut self, result: MonitorResult) -> io::Result<usize> {
+    pub fn handle_task_result(&mut self, result: MonitorResult) -> io::Result<usize> {
             let mut destination: Option<PathBuf> = None;
     
             let msg_to_client = match result {
@@ -129,5 +139,46 @@ impl ServerState {
                 },
                 _ => {todo!()}
             }
+    }
+
+    pub fn try_pop_task(&mut self, server_config: &ServerConfig) -> Option<ClientTask> {
+        if let Some((task, _)) = self.task_pqueue.peek() {
+            if self.filters_count.can_run_pipeline(
+                &server_config.filters_config,
+                &task.transformations
+            ) {
+                // Since the loop is only entered if the queue's highest priority element can be
+                //peeked into, this unwrap is safe.
+                let (task, _) = self.task_pqueue.pop().unwrap();
+                return Some(task);
+            }
+        }
+
+        None
+    }
+
+    pub fn process_task(&mut self, server_config: &ServerConfig, task: ClientTask) {
+            let destination = self.udsock_dir
+                .join(String::from("sdstore_") + &task.client_pid.to_string() + &".sock"
+            );
+            let msg_to_client = MessageToClient::Processing;
+            // TODO: Handle this unwrap
+            let bytes = bincode::serialize(&msg_to_client).unwrap();
+            // TODO: handle this unwrap
+            self.udsocket.send_to(&bytes, destination).unwrap();
+
+            // update server's limits with new task's counts.
+            self.filters_count.add_assign(&task.transformations);
+            // get and update server's task counter
+            let task_number = self.get_incr_task_counter();
+
+            let sender_clone = self.sender.clone();
+            // TODO: don't unwrap here
+            let monitor = Monitor::build(
+                task,
+                task_number,
+                server_config.transformations_path(),
+                sender_clone).unwrap();
+            self.running_tasks.insert(monitor.thread_id(), monitor);
     }
 }

@@ -1,22 +1,18 @@
 use std::{
-    collections::HashMap,
-    env, process, fs, io, sync::{mpsc::{self, Sender}, Arc},
-    thread::{ThreadId, self}, path::{Path, PathBuf}, ops::{SubAssign, AddAssign},
+    env, process, fs, io, sync::{mpsc, Arc},
     os::unix::net::UnixDatagram
 };
 
-use priority_queue::PriorityQueue;
 
 use rust_sdstore::{
     core::{
         messaging::ClientRequest,
-        server::config::{self, ServerConfig}, limits::{self, RunningFilters},
-        client_task::ClientTask,
-        monitor::{Monitor, MonitorResult}, messaging::{self, MessageToClient}
+        server::{config, state::ServerState},
+        messaging::MessageToServer
     }
 };
 
-fn udsock_listen(listener: Arc<UnixDatagram>, sender: mpsc::Sender<messaging::MessageToServer>) {
+fn udsock_listen(listener: Arc<UnixDatagram>, sender: mpsc::Sender<MessageToServer>) {
     // Loop the processing of clients' requests.
     let mut buf = [0; 1024];
     loop {
@@ -28,128 +24,7 @@ fn udsock_listen(listener: Arc<UnixDatagram>, sender: mpsc::Sender<messaging::Me
         let request: ClientRequest = bincode::deserialize(&buf[..n]).unwrap();
 
         // TODO: this unwrap needs to be handled
-        sender.send(messaging::MessageToServer::Client(request)).unwrap();
-    }
-}
-
-// done
-fn queue_task(task_pqueue: &mut PriorityQueue<ClientTask, usize>, task: ClientTask) {
-    let prio = task.priority;
-    task_pqueue.push(task, prio);
-}
-
-// done
-fn accept_task(
-    task_pqueue: &mut PriorityQueue<ClientTask, usize>,
-    listener: &Arc<UnixDatagram>,
-    client_udsock_path: &Path,
-    task: ClientTask
-) -> io::Result<usize> {
-    let client_pid = task.client_pid;
-    queue_task(task_pqueue, task);
-
-    let destination = client_udsock_path.join(
-            String::from("sdstore_") + &client_pid.to_string() + &".sock"
-    );
-    let msg_to_client = MessageToClient::Pending;
-
-    let bytes = bincode::serialize(&msg_to_client).unwrap();
-    listener.send_to(&bytes, destination)
-}
-
-// done
-fn sunset_task(
-    thread_id: ThreadId,
-    running_tasks: &mut HashMap<ThreadId, Monitor>
-) -> Option<Monitor> {
-    running_tasks.remove(&thread_id)
-}
-
-// done
-fn process_task_result(
-    result: MonitorResult,
-    running_tasks: &mut HashMap<ThreadId, Monitor>,
-    filters_count: &mut RunningFilters,
-    listener: &Arc<UnixDatagram>,
-    client_udsock_path: &Path) -> io::Result<usize> {
-        let mut destination: Option<PathBuf> = None;
-
-        let msg_to_client = match result {
-            Err(_) => MessageToClient::RequestError,
-            Ok((thread_id, exit_status)) => {
-                if let Some(monitor) = sunset_task(thread_id, running_tasks) {
-                    // Deduct the completed tasks' filter counts from the server's.
-                    filters_count.sub_assign(&monitor.task.get_transformations());
-
-                    destination = Some(client_udsock_path
-                        .join(String::from("sdstore_") + &monitor.task.client_pid.to_string() + &".sock"
-                    ));
-                    if exit_status.success() {
-                        MessageToClient::Concluded
-                    } else {
-                        MessageToClient::RequestError
-                    }
-                } else {
-                    // This would be odd: there is a thread in the server supposedly running a
-                    // monitor, but that monitor does not exist.
-                    //
-                    // TODO: handle this panic, as well as the unwrap below.
-                    panic!();
-                }
-            }
-        };
-
-        match destination {
-            Some(dest) => {
-                // TODO: this unwrap can be handled, at the expense of quite a bit of additional code
-                let bytes = bincode::serialize(&msg_to_client).unwrap();
-                listener.send_to(&bytes, dest)
-            },
-            _ => {todo!()}
-        }
-}
-
-fn task_steal(
-    task_pqueue: &mut PriorityQueue<ClientTask, usize>,
-    filters_count: &mut RunningFilters,
-    running_tasks: &mut HashMap<ThreadId, Monitor>,
-    server_config: &ServerConfig,
-    task_counter: &mut usize,
-    sender: Sender<messaging::MessageToServer>,
-    listener: &Arc<UnixDatagram>,
-    client_udsock_path: &Path
-) {
-    while let Some((task, _)) = task_pqueue.peek() {
-        if filters_count.can_run_pipeline(&server_config.filters_config, &task.transformations) {
-            // Since the loop is only entered if the queue's highest priority element can be
-            //peeked into, this unwrap is safe.
-            let (task, _) = task_pqueue.pop().unwrap();
-
-            // TODO: Handle this unwrap
-            let destination = client_udsock_path
-                .join(String::from("sdstore_") + &task.client_pid.to_string() + &".sock"
-            );
-            let msg_to_client = MessageToClient::Processing;
-        
-            let bytes = bincode::serialize(&msg_to_client).unwrap();
-            // TODO: handle this unwrap
-            listener.send_to(&bytes, destination).unwrap();
-
-            // update server's limits with new task's counts.
-            filters_count.add_assign(&task.transformations);
-
-            let sender_clone = sender.clone();
-            // TODO: don't unwrap here
-            let monitor = Monitor::build(
-                task,
-                *task_counter,
-                server_config.transformations_path(),
-                sender_clone).unwrap();
-            running_tasks.insert(monitor.thread_id(), monitor);
-
-            // update server's task counter
-            *task_counter += 1;
-        }
+        sender.send(MessageToServer::Client(request)).unwrap();
     }
 }
 
@@ -197,28 +72,22 @@ fn main() {
                 process::exit(1);
             });
     log::info!("server listening on Unix datagram socket: {:?}", listener);
-    let listener = Arc::new(listener);
 
-    // Used to number each request.
-    let mut counter = 0;
-    let mut filters_count = limits::RunningFilters::default();
-    let mut task_pqueue = PriorityQueue::<ClientTask, usize>::new();
-    let mut running_tasks = HashMap::<ThreadId, Monitor>::new();
-    let (sender, receiver) = mpsc::channel::<messaging::MessageToServer>();
+    let mut server_state = ServerState::new(listener, udsock_dir);
 
-    let listener_clone = Arc::clone(&listener);
-    let sender_clone = sender.clone();
-    let listening_thread = thread::Builder::new()
-        .name(String::from("sdstored_udsock_listener"))
-        .spawn(move || udsock_listen(listener_clone, sender_clone))
-        .unwrap_or_else(|err| {
-            log::error!("Could not spawn UdSocket listening thread. Error: {:?}", err);
-            process::exit(1);
-        });
+    let sender_clone = server_state.get_sender().clone();
+    let listener_clone = server_state.get_udsocket();
+    server_state.spawn_udsock_mngr(
+        "sdstored_udsock_listener",
+        Box::new(move || udsock_listen(listener_clone, sender_clone))
+    ).unwrap_or_else(|err| {
+        log::error!("Could not spawn UdSocket listening thread. Error: {:?}", err);
+        process::exit(1);
+    });
 
     // Loop the processing clients' and monitors' messages.
     loop {
-        let msg = match receiver.recv() {
+        let msg = match server_state.receiver.recv() {
             Err(err) => {
                 log::warn!("could not read from message receiver. Error: {:?}", err);
                 break;
@@ -226,44 +95,25 @@ fn main() {
             Ok(t) => t
         };
         match msg {
-            messaging::MessageToServer::Client(req) => {
-                match req {
-                    messaging::ClientRequest::Status => {},
-                    messaging::ClientRequest::ProcFile(task) => {
-                        // TODO: handle this unwrap
-                        accept_task(
-                            &mut task_pqueue,
-                            &listener,
-                            &udsock_dir,
-                            task,
-                            ).unwrap();
-                    },
-                }
+            MessageToServer::Client(ClientRequest::Status) => {
+                // TODO: return server status to client
             }
-            messaging::MessageToServer::Monitor(res) => {
-                match process_task_result(
-                    res,
-                    &mut running_tasks,
-                    &mut filters_count,
-                    &listener,
-                    &udsock_dir) {
+            MessageToServer::Client(ClientRequest::ProcFile(task)) => {
+                // TODO: handle this unwrap
+                server_state.receive_task(task).unwrap();
+            }
+            MessageToServer::Monitor(res) => {
+                match server_state.handle_task_result(res) {
                     // TODO
                     Err(_) => {}
                     Ok(_)  => {}
                 }
             }
         }
+    }
 
-    let sender_clone = sender.clone();
-    task_steal(
-        &mut task_pqueue,
-        &mut filters_count,
-        &mut running_tasks,
-        &config,
-        &mut counter,
-        sender_clone,
-        &listener,
-        &udsock_dir)
-
+    while let Some(task) = server_state.try_pop_task(&config) {
+        log::info!("Executing task popped from pqueue:\n{:?}", task);
+        server_state.process_task(&config, task);
     }
 }

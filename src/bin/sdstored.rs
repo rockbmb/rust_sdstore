@@ -99,6 +99,7 @@ fn main() {
                 // TODO: return server status to client
             }
             MessageToServer::Client(ClientRequest::ProcFile(task)) => {
+                log::info!("Queueing received task:\n{:?}", task);
                 // TODO: handle this unwrap
                 server_state.receive_task(task).unwrap();
             }
@@ -110,10 +111,13 @@ fn main() {
                 }
             }
         }
-    }
 
     while let Some(task) = server_state.try_pop_task(&config) {
+        let client_pid = task.client_pid;
         log::info!("Executing task popped from pqueue:\n{:?}", task);
-        server_state.process_task(&config, task);
+        let (mon_id, task_num) = server_state.process_task(&config, task);
+        log::info!("Task by client {client_pid} assigned number {task_num} and monitor {:?}", mon_id);
+    }
+
     }
 }

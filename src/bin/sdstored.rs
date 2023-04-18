@@ -1,6 +1,5 @@
 use std::{
-    env, process, fs, io, sync::{mpsc, Arc},
-    os::unix::net::UnixDatagram
+    env, process, fs, io, os::unix::net::UnixDatagram
 };
 
 
@@ -11,22 +10,6 @@ use rust_sdstore::{
         messaging::MessageToServer
     }
 };
-
-fn udsock_listen(listener: Arc<UnixDatagram>, sender: mpsc::Sender<MessageToServer>) {
-    // Loop the processing of clients' requests.
-    let mut buf = [0; 1024];
-    loop {
-        let n = listener.recv(&mut buf).unwrap_or_else(|err| {
-            log::error!("Could not read from UdSocket. Error: {:?}", err);
-            process::exit(1);
-        });
-        // TODO: handle this unwrap
-        let request: ClientRequest = bincode::deserialize(&buf[..n]).unwrap();
-
-        // TODO: this unwrap needs to be handled
-        sender.send(MessageToServer::Client(request)).unwrap();
-    }
-}
 
 fn main() {
     // Init logging
@@ -40,12 +23,12 @@ fn main() {
     });
 
     // Read the server's configs from args: file with max filter definitions, and binary folder path
-    let config = config::ServerConfig::build(&mut env::args())
+    let server_config = config::ServerConfig::build(&mut env::args())
         .unwrap_or_else(|err| {
             log::error!("Problem parsing config: {:?}", err);
             process::exit(1);
         });
-    log::info!("Read config:\n{:?}", config);
+    log::info!("Read config:\n{:?}", server_config);
 
     let curr_dir = std::env::current_dir().unwrap_or_else(|err| {
         log::error!("Could not get pwd. Error {:?}", err);
@@ -75,15 +58,12 @@ fn main() {
 
     let mut server_state = ServerState::new(listener, udsock_dir);
 
-    let sender_clone = server_state.get_sender().clone();
-    let listener_clone = server_state.get_udsocket();
-    server_state.spawn_udsock_mngr(
-        "sdstored_udsock_listener",
-        Box::new(move || udsock_listen(listener_clone, sender_clone))
-    ).unwrap_or_else(|err| {
-        log::error!("Could not spawn UdSocket listening thread. Error: {:?}", err);
-        process::exit(1);
-    });
+    server_state
+        .spawn_udsock_mngr("sdstored_udsock_listener")
+        .unwrap_or_else(|err| {
+            log::error!("Could not spawn UdSocket listening thread. Error: {:?}", err);
+            process::exit(1);
+        });
 
     // Loop the processing clients' and monitors' messages.
     loop {
@@ -122,10 +102,10 @@ fn main() {
             }
         }
 
-        while let Some(task) = server_state.try_pop_task(&config) {
+        while let Some(task) = server_state.try_pop_task(&server_config) {
             let client_pid = task.client_pid;
             log::info!("Executing task popped from pqueue:\n{:?}", task);
-            match server_state.process_task(&config, task) {
+            match server_state.process_task(&server_config, task) {
                 Err(err) => log::error!("Failed to process task by client PID {client_pid}: {:?}", err),
                 Ok((mon_id, task_num)) =>
                     log::info!("Task by client {client_pid} assigned number {task_num} and monitor {:?}", mon_id)

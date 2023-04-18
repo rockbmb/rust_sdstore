@@ -11,7 +11,7 @@ use crate::core::{
     client_task::ClientTask,
     limits::RunningFilters,
     monitor::{Monitor, MonitorResult, MonitorError},
-    messaging::{self, MessageToClient}};
+    messaging::{self, MessageToClient, MessageToServer, ClientRequest}};
 
 use super::config::ServerConfig;
 
@@ -83,6 +83,11 @@ pub enum ServerError {
     UdSocketWriteError(io::Error),
     /// Could not serialize a message to be sent through the unix domain socket.
     MsgSerializeError(BincodeError),
+    /// Could not deserialize a message read from the unix domain socket.
+    MsgDeserializeError(BincodeError),
+
+    /// The `UnixDatagram` listener thread could not write into its ``
+
     /// Failed to spawn the monitor to whom a client's task would be assigned.
     MonitorSpawnError(MonitorError),
 }
@@ -96,6 +101,30 @@ impl From<BincodeError> for ServerError {
 impl From<MonitorError> for ServerError {
     fn from(err: MonitorError) -> Self {
         Self::MonitorSpawnError(err)
+    }
+}
+
+/// Closure passed to the server thread that will be spawned with the purpose of
+/// listening to the `UnixDatagram` socket.
+fn udsock_listen(
+    listener: Arc<UnixDatagram>,
+    sender: mpsc::Sender<MessageToServer>
+) -> () {
+    // Loop the processing of clients' requests.
+    let mut buf = [0; 1024];
+    loop {
+        let n = listener.recv(&mut buf).unwrap_or_else(|err| {
+            panic!("Failed to read from UnixDatagram: {:?}", err)
+        });
+
+        let request: ClientRequest = bincode::deserialize(&buf[..n])
+            .unwrap_or_else(|err| {
+                panic!("Failed to deserialize message from UnixDatagram: {:?}", err)
+            });
+
+        sender.send(MessageToServer::Client(request)).unwrap_or_else(|err| {
+            panic!("Failed to send message to server via channel: {:?}", err)
+        });
     }
 }
 
@@ -162,10 +191,13 @@ impl ServerState {
     ///
     /// The closure it is spawned with must give it ownership of a new `Arc` to the socket,
     /// and likewise of a cloned `Sender<MessageToServer>`.
-    pub fn spawn_udsock_mngr(&mut self, thread_name: &str, fun: UdSocketListener) -> Result<(), ServerError> {
+    pub fn spawn_udsock_mngr(&mut self, thread_name: &str) -> Result<(), ServerError> {
+        let sender_clone = self.get_sender().clone();
+        let listener_clone = self.get_udsocket();
+
         let udsocket_manager = thread::Builder::new()
             .name(String::from(thread_name))
-            .spawn(move || fun())
+            .spawn(move || udsock_listen(listener_clone, sender_clone))
             .map_err(|err| ServerError::UdSocketManagerSpawnError(err))?;
 
         self.udsock_mngr = Some(udsocket_manager);

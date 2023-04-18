@@ -20,7 +20,9 @@ pub enum MessageToClient {
     Pending,
     /// The request has been assigned to a `Monitor`, as has begun processing
     Processing,
-    /// The request was sucessfully completed 
+    /// The request was sucessfully completed
+    ///
+    /// TODO: included bytes in/out stats from monitor
     Concluded
 }
 

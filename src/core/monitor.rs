@@ -44,7 +44,7 @@ pub struct Monitor {
 
 pub type ClientPid = u32;
 
-pub type MonitorResult = (ThreadId, ClientPid, Result<ExitStatus, MonitorError>);
+pub type MonitorResult = (ThreadId, Result<ExitStatus, MonitorError>);
 
 impl Monitor {
     pub fn build(
@@ -138,8 +138,7 @@ fn start_pipeline_monitor(
 
 
     let thread_id = thread::current().id();
-    let client_pid = task.client_pid;
-    let result = messaging::MessageToServer::Monitor((thread_id, client_pid, result));
+    let result = messaging::MessageToServer::Monitor((thread_id, result));
 
     sender.send(result).map_err(|_| MonitorError::MpscSenderError)
 }

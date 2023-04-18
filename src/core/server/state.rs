@@ -4,12 +4,13 @@ use std::{
     os::unix::net::UnixDatagram, path::PathBuf, ops::{SubAssign, AddAssign},
 };
 
+use bincode::Error as BincodeError;
 use priority_queue::PriorityQueue;
 
 use crate::core::{
     client_task::ClientTask,
     limits::RunningFilters,
-    monitor::{Monitor, MonitorResult},
+    monitor::{Monitor, MonitorResult, MonitorError},
     messaging::{self, MessageToClient}};
 
 use super::config::ServerConfig;
@@ -56,7 +57,7 @@ pub struct ServerState {
     ///
     /// TODO
     /// It needs to be stored to allow the graceful termination of the server: as soon as the
-    /// main threads receives a e.g. `SIGINTT/SIGTERM`, this thread will be responsible for
+    /// main threads receives a e.g. `SIGINT/SIGTERM`, this thread will be responsible for
     /// closing the socket and freeing resources.
     udsock_mngr: Option<JoinHandle<()>>,
 
@@ -68,6 +69,34 @@ pub struct ServerState {
     /// assuming both know where to find each other; these are shortcuts - a
     /// serious project would never have this.
     udsock_dir: PathBuf
+}
+
+/// Errors that a server's operations can raise.
+#[derive(Debug)]
+pub enum ServerError {
+    /// Spawning the thread that would manage the unix domain socket failed.
+    UdSocketManagerSpawnError(io::Error),
+    /// Writing to the server's unix domain socket failed.
+    ///
+    /// Notice that `UnixDatagram::send_to` returning "`0` bytes written" could also
+    /// be an error, but it is not handled.
+    UdSocketWriteError(io::Error),
+    /// Could not serialize a message to be sent through the unix domain socket.
+    MsgSerializeError(BincodeError),
+    /// Failed to spawn the monitor to whom a client's task would be assigned.
+    MonitorSpawnError(MonitorError),
+}
+
+impl From<BincodeError> for ServerError {
+    fn from(err: BincodeError) -> Self {
+        Self::MsgSerializeError(err)
+    }
+}
+
+impl From<MonitorError> for ServerError {
+    fn from(err: MonitorError) -> Self {
+        Self::MonitorSpawnError(err)
+    }
 }
 
 impl ServerState {
@@ -87,6 +116,10 @@ impl ServerState {
         let res = self.task_counter;
         self.task_counter += 1;
         res
+    }
+
+    pub fn client_pid_from_monitor_id(&self, t_id: &ThreadId) -> Option<u32> {
+        self.running_tasks.get(t_id).map(|monitor| monitor.task.client_pid)
     }
 
     /// Given a client's PID, construct the path of its datagram socket.
@@ -129,10 +162,11 @@ impl ServerState {
     ///
     /// The closure it is spawned with must give it ownership of a new `Arc` to the socket,
     /// and likewise of a cloned `Sender<MessageToServer>`.
-    pub fn spawn_udsock_mngr(&mut self, thread_name: &str, fun: UdSocketListener) -> io::Result<()> {
+    pub fn spawn_udsock_mngr(&mut self, thread_name: &str, fun: UdSocketListener) -> Result<(), ServerError> {
         let udsocket_manager = thread::Builder::new()
             .name(String::from(thread_name))
-            .spawn(move || fun())?;
+            .spawn(move || fun())
+            .map_err(|err| ServerError::UdSocketManagerSpawnError(err))?;
 
         self.udsock_mngr = Some(udsocket_manager);
 
@@ -141,7 +175,7 @@ impl ServerState {
 
     /// Insert new inbound task in the priority queue, and inform the sending
     /// client that it is now pending.
-    pub fn new_task(&mut self, task: ClientTask) -> io::Result<usize> {
+    pub fn new_task(&mut self, task: ClientTask) -> Result<(), ServerError> {
         let client_pid = task.client_pid;
         let prio = task.priority;
         self.task_pqueue.push(task, prio);
@@ -149,8 +183,12 @@ impl ServerState {
         let destination = self.get_udsock_dest(client_pid);
         let msg_to_client = MessageToClient::Pending;
 
-        let bytes = bincode::serialize(&msg_to_client).unwrap();
-        self.udsocket.send_to(&bytes, destination)
+        let bytes = bincode::serialize(&msg_to_client)?;
+        self
+            .udsocket
+            .send_to(&bytes, destination)
+            .map(drop)
+            .map_err(|err| ServerError::UdSocketWriteError(err))
     }
 
     /// Attempt to remove the highest priority task in the queue.
@@ -161,7 +199,6 @@ impl ServerState {
     /// * That the task that was sucessfully popped can be run, given the server's
     ///   currently running filter count, and the filters required to execute the task.
     ///
-    /// 
     /// If this is not possible, return `None`.
     pub fn try_pop_task(&mut self, server_config: &ServerConfig) -> Option<ClientTask> {
         if let Some((task, _)) = self.task_pqueue.peek() {
@@ -186,13 +223,19 @@ impl ServerState {
     /// * handles the creation of a monitor responsible for the task,
     /// * indexes it in the server's hashmap or currently running tasks,
     /// * informs the client its task has begun processing
-    pub fn process_task(&mut self, server_config: &ServerConfig, task: ClientTask) -> (ThreadId, usize) {
+    pub fn process_task(
+        &mut self,
+        server_config: &ServerConfig,
+        task: ClientTask
+    ) -> Result<(ThreadId, usize), ServerError> {
             let destination = self.get_udsock_dest(task.client_pid);
             let msg_to_client = MessageToClient::Processing;
-            // TODO: Handle this unwrap
-            let bytes = bincode::serialize(&msg_to_client).unwrap();
-            // TODO: handle this unwrap
-            self.udsocket.send_to(&bytes, destination).unwrap();
+
+            let bytes = bincode::serialize(&msg_to_client)?;
+            match self.udsocket.send_to(&bytes, destination) {
+                Err(err) => return Err(ServerError::UdSocketWriteError(err)),
+                _ => {}
+            };
 
             // update server's limits with new task's counts.
             self.filters_count.add_assign(&task.transformations);
@@ -200,15 +243,14 @@ impl ServerState {
             let task_number = self.get_incr_task_counter();
 
             let sender_clone = self.sender.clone();
-            // TODO: don't unwrap here
             let monitor = Monitor::build(
                 task, task_number, server_config.transformations_path(), sender_clone
-            ).unwrap();
+            )?;
             let monitor_id = monitor.thread_id();
 
             self.running_tasks.insert(monitor.thread_id(), monitor);
 
-            (monitor_id, task_number)
+            Ok((monitor_id, task_number))
     }
 
     /// Given the result of a monitor that was responsible for a given task,
@@ -216,9 +258,18 @@ impl ServerState {
     ///
     /// * inform the client of if the task ended in success or failure, and
     /// * update the server's count of currently running filters
-    pub fn handle_task_result(&mut self, mon_res: MonitorResult) -> io::Result<usize> {
-        let (thread_id, client_pid, result) = mon_res;
-        let destination = self.get_udsock_dest(client_pid);
+    pub fn handle_task_result(&mut self, mon_res: MonitorResult) -> Result<(), ServerError> {
+        let (thread_id, result) = mon_res;
+
+        let monitor = match self.running_tasks.remove(&thread_id) {
+            Some(m) => m,
+            // This would be very odd: there is a thread in the server supposedly running a
+            // monitor, but that monitor does not exist.
+            None => panic!()
+        };
+
+        // update server's running filter counts to account for finished task.
+        self.filters_count.sub_assign(&monitor.task.get_transformations());
 
         let msg_to_client = match result {
             Err(_) => MessageToClient::RequestInitError,
@@ -226,17 +277,13 @@ impl ServerState {
             Ok(_) => MessageToClient::RequestError
         };
 
-        if let Some(monitor) = self.running_tasks.remove(&thread_id) {
-            // Deduct the completed tasks' filter counts from the server's.
-            self.filters_count.sub_assign(&monitor.task.get_transformations());
-        } else {
-            // This would be very odd: there is a thread in the server supposedly running a
-            // monitor, but that monitor does not exist.
-            panic!();
-        }
-
-        // TODO: this unwrap can be handled, at the expense of quite a bit of additional code
-        let bytes = bincode::serialize(&msg_to_client).unwrap();
-        self.udsocket.send_to(&bytes, destination)
+        let client_pid = monitor.task.client_pid;
+        let destination = self.get_udsock_dest(client_pid);
+        let bytes = bincode::serialize(&msg_to_client)?;
+        self
+            .udsocket
+            .send_to(&bytes, destination)
+            .map(drop)
+            .map_err(|err| ServerError::UdSocketWriteError(err))
     }
 }

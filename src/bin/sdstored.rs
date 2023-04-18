@@ -99,15 +99,25 @@ fn main() {
                 // TODO: return server status to client
             }
             MessageToServer::Client(ClientRequest::ProcFile(task)) => {
-                log::info!("Queueing received task:\n{:?}", task);
-                // TODO: handle this unwrap
-                server_state.new_task(task).unwrap();
+                let client_pid = task.client_pid;
+                log::info!("Attempting to queueing received task:\n{:?}", task);
+                match server_state.new_task(task) {
+                    Ok(_) => log::info!("Successfully queued task by client PID {client_pid}"),
+                    Err(err) => log::error!("Failed to queue task by client PID {client_pid}: {:?}", err),
+                }
             }
             MessageToServer::Monitor(res) => {
+                let t_id = res.0;
+                let cl_pid = match server_state.client_pid_from_monitor_id(&t_id) {
+                    None => {
+                        log::error!("message received from nonexistent monitor!");
+                        break;
+                    }
+                    Some(t) => t
+                };
                 match server_state.handle_task_result(res) {
-                    // TODO
-                    Err(_) => {}
-                    Ok(_)  => {}
+                    Err(err) => log::error!("Monitor {:?} for task by client {cl_pid} failed: {:?}", t_id, err),
+                    Ok(_)  => log::info!("Monitor {:?} for task by client {cl_pid} succeeded.", t_id)
                 }
             }
         }
@@ -115,8 +125,11 @@ fn main() {
         while let Some(task) = server_state.try_pop_task(&config) {
             let client_pid = task.client_pid;
             log::info!("Executing task popped from pqueue:\n{:?}", task);
-            let (mon_id, task_num) = server_state.process_task(&config, task);
-            log::info!("Task by client {client_pid} assigned number {task_num} and monitor {:?}", mon_id);
+            match server_state.process_task(&config, task) {
+                Err(err) => log::error!("Failed to process task by client PID {client_pid}: {:?}", err),
+                Ok((mon_id, task_num)) =>
+                    log::info!("Task by client {client_pid} assigned number {task_num} and monitor {:?}", mon_id)
+            }
         }
 
     }

@@ -36,10 +36,15 @@ pub struct Monitor {
     thread: Thread,
 }
 
-/// Result type of a monitor. It'll either return the `ExitStatus` of the 
-/// child (process) that will execute the pipeline in the thread's stead,
-/// or a `MonitorError`.
-pub type MonitorResult = Result<(ThreadId, ExitStatus), MonitorError>;
+/// Result type of a monitor. It'll return:
+///
+/// * the thread ID of the monitor assigned to the task
+/// * the PID of the client which submitted the task
+/// * either the `ExitStatus` of the the pipeline, or a `MonitorError`.
+
+pub type ClientPid = u32;
+
+pub type MonitorResult = (ThreadId, ClientPid, Result<ExitStatus, MonitorError>);
 
 impl Monitor {
     pub fn build(
@@ -47,7 +52,7 @@ impl Monitor {
         task_number: usize,
         transformations_path: PathBuf,
         sender: Sender<messaging::MessageToServer>
-    ) -> Result<Monitor, MonitorError> {
+    ) -> Result<Self, MonitorError> {
         let task_clone = task.clone();
         let path_clone = transformations_path.clone();
         let thread = match thread::Builder
@@ -129,9 +134,12 @@ fn start_pipeline_monitor(
     
         pipeline.join()
     }
-    .map_err(|err| { MonitorError::PipelineFailure(err) })
-    .map(|status| (thread::current().id(), status));
-    let result = messaging::MessageToServer::Monitor(result);
+    .map_err(|err| { MonitorError::PipelineFailure(err) });
+
+
+    let thread_id = thread::current().id();
+    let client_pid = task.client_pid;
+    let result = messaging::MessageToServer::Monitor((thread_id, client_pid, result));
 
     sender.send(result).map_err(|_| MonitorError::MpscSenderError)
 }

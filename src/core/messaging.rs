@@ -11,7 +11,10 @@ use super::{
 /// at which its request is.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum MessageToClient {
-    /// The request could not be started, or could, but failed partway.
+    /// The request could not be started
+    RequestInitError,
+    /// The request could be assigned to a monitor and start execution, but the
+    /// exit status of its monitor was that of failure.
     RequestError,
     /// The request has been received, and is pending processing.
     Pending,
@@ -24,10 +27,11 @@ pub enum MessageToClient {
 impl Display for MessageToClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            Self::RequestError => write!(f, "the request failed. check server logs for information"),
-            Self::Pending      => write!(f, "pending"),
-            Self::Processing   => write!(f, "processing"),
-            Self::Concluded    => write!(f, "concluded"),
+            Self::RequestInitError => write!(f, "the request started, but failed. check server logs for information"),
+            Self::RequestError     => write!(f, "the request failed to start. check server logs for information"),
+            Self::Pending          => write!(f, "pending"),
+            Self::Processing       => write!(f, "processing"),
+            Self::Concluded        => write!(f, "concluded"),
         }
     }
 }

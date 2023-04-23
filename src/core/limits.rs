@@ -1,9 +1,24 @@
-use std::ops::{Add, AddAssign, SubAssign};
+use std::ops::{Add, AddAssign, SubAssign, Deref, DerefMut};
 
 use super::filter::Filter;
 use super::server::config::FiltersConfig;
 
-pub type RunningFilters = FiltersConfig;
+#[derive(Debug, PartialEq, Eq, Clone, PartialOrd)]
+pub struct RunningFilters(FiltersConfig);
+
+impl Deref for RunningFilters {
+    type Target = FiltersConfig;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for RunningFilters {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 impl RunningFilters {
     fn change_filter(&mut self, filter: &Filter, op: impl Fn(usize) -> usize) {
@@ -26,13 +41,17 @@ impl RunningFilters {
         self.change_filter(filter, |x| x - 1)
     }
 
+    pub fn default() -> Self {
+        Self(FiltersConfig::default())
+    }
+
     /// This method checks whether a client's requests can be executed, given the currently
     /// running transformations in the server and the limits read from the config file.
     pub fn can_run_pipeline(
         &self,
         server_cfg: &FiltersConfig,
         client_req: &Vec<Filter>
-    ) -> bool { self + client_req <= *server_cfg }
+    ) -> bool { (self + client_req).0 <= *server_cfg }
 }
 
 /// The [`Add`] instance for [`RunningFilters`] takes a reference

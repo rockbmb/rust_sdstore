@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn task_parsing_works() {
         let command = String::from(
-            "./sdstore proc-file 5 samples/file-a  bcompress nop gcompress encrypt nop"
+            "./sdstore proc-file 5 samples/file-a outputs/file-a-output bcompress nop gcompress encrypt nop"
         );
 
         let args = command

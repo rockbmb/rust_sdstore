@@ -4,7 +4,7 @@ use std::{fs, io, path::PathBuf};
 /// the server is permitted to run.
 ///
 /// This is to be read from a file passed to the server executable.
-#[derive(Debug, PartialEq, Eq, Clone, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub struct FiltersConfig {
     pub nop: usize,
     pub bcompress: usize,

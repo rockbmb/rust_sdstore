@@ -6,22 +6,27 @@ use subprocess::{Exec, Pipeline, PopenError, ExitStatus};
 
 use super::{client_task, messaging};
 
+/// Errors that may occur when spawning a monitor.
+#[derive(Debug)]
+pub enum MonitorBuildError {
+    /// Problem spawning the monitor's thread.
+    ThreadSpawnError(io::Error),
+}
+
 /// A selection of the errors a monitor may enconter during a pipeline's execution.
 #[derive(Debug)]
 pub enum MonitorError {
-    /// Problem spawning the thread responsible for the pipeline's execution.
-    ThreadSpawnError(io::Error),
-    /// When executing the pipeline, it had 0 commands. This isn't supposed to happen
-    /// as the server checks this before running a pipeline.
+    /// The pipeline scheduled for execution had 0 commands. This isn't supposed to happen
+    /// as the server must check for this before executing a pipeline.
     NoTransformationsGiven,
     /// A problem opening/reading the input file.
     InputFileError(io::Error),
     /// A problem creating/opening the output file.
     OutputFileError(io::Error),
+
     /// A general error may occurrs after `wait`ing for the process responsible for the last
     /// step in the pipeline to finish.
     PipelineFailure(PopenError),
-
     /// The pipeline finished, but its exit status was not that of success.
     PipelineExitStatusError(ExitStatus),
     /// A problem opening the input file's metadata to obtain its size.
@@ -64,7 +69,7 @@ impl Monitor {
         task_number: usize,
         transformations_path: PathBuf,
         sender: Sender<messaging::MessageToServer>
-    ) -> Result<Self, MonitorError> {
+    ) -> Result<Self, MonitorBuildError> {
         let task_clone = task.clone();
         let path_clone = transformations_path.clone();
         let thread = match thread::Builder
@@ -77,7 +82,7 @@ impl Monitor {
                     sender
                 ))
             .map(|handle| handle.thread().clone()) {
-                Err(err) => return Err(MonitorError::ThreadSpawnError(err)),
+                Err(err) => return Err(MonitorBuildError::ThreadSpawnError(err)),
                 Ok(t) => t
             };
 

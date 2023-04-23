@@ -10,7 +10,7 @@ use priority_queue::PriorityQueue;
 use crate::core::{
     client_task::ClientTask,
     limits::RunningFilters,
-    monitor::{Monitor, MonitorResult, MonitorError},
+    monitor::{Monitor, MonitorResult, MonitorError, MonitorBuildError, MonitorSuccess},
     messaging::{self, MessageToClient, MessageToServer, ClientRequest}};
 
 use super::config::ServerConfig;
@@ -86,10 +86,8 @@ pub enum ServerError {
     /// Could not deserialize a message read from the unix domain socket.
     MsgDeserializeError(BincodeError),
 
-    /// The `UnixDatagram` listener thread could not write into its ``
-
     /// Failed to spawn the monitor to whom a client's task would be assigned.
-    MonitorSpawnError(MonitorError),
+    MonitorSpawnError(MonitorBuildError),
 }
 
 impl From<BincodeError> for ServerError {
@@ -98,8 +96,8 @@ impl From<BincodeError> for ServerError {
     }
 }
 
-impl From<MonitorError> for ServerError {
-    fn from(err: MonitorError) -> Self {
+impl From<MonitorBuildError> for ServerError {
+    fn from(err: MonitorBuildError) -> Self {
         Self::MonitorSpawnError(err)
     }
 }
@@ -288,7 +286,7 @@ impl ServerState {
     /// Given the result of a monitor that was responsible for a given task,
     /// process its data and update the server's state accordingly:
     ///
-    /// * inform the client of if the task ended in success or failure, and
+    /// * inform the client if the task ended in success or failure, and
     /// * update the server's count of currently running filters
     pub fn handle_task_result(&mut self, mon_res: MonitorResult) -> Result<(), ServerError> {
         let MonitorResult { thread, result } = mon_res;
@@ -303,11 +301,7 @@ impl ServerState {
         // update server's running filter counts to account for finished task.
         self.filters_count.sub_assign(&monitor.task.get_transformations());
 
-        let msg_to_client = match result {
-            Ok(bytes_in_out) => MessageToClient::Concluded(bytes_in_out),
-            Err(MonitorError::PipelineExitStatusError(_)) => MessageToClient::RequestError,
-            Err(_) => MessageToClient::RequestInitError,
-        };
+        let msg_to_client = mon_res_to_cl_msg(result);
 
         let client_pid = monitor.task.client_pid;
         let destination = self.get_udsock_dest(client_pid);
@@ -317,5 +311,25 @@ impl ServerState {
             .send_to(&bytes, destination)
             .map(drop)
             .map_err(|err| ServerError::UdSocketWriteError(err))
+    }
+}
+
+/// Convert the result of a pipeline sent by its responsible monitor to a message
+/// to be sent to the requester client.
+fn mon_res_to_cl_msg(result: Result<MonitorSuccess, MonitorError>) -> MessageToClient {
+    match result {
+        Ok(bytes_in_out) => MessageToClient::Concluded(bytes_in_out),
+        Err(err) => match err {
+            MonitorError::NoTransformationsGiven |
+            MonitorError::InputFileError(_) |
+            MonitorError::OutputFileError(_) => {
+                MessageToClient::RequestInitError
+            },
+            MonitorError::PipelineFailure(_) | MonitorError::PipelineExitStatusError(_) |
+            MonitorError::InputFileMetadataError(_) | MonitorError::OutputFileMetadataError(_) |
+            MonitorError::MpscSenderError => {
+                MessageToClient::RequestError
+            } 
+        }
     }
 }

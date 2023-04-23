@@ -291,9 +291,9 @@ impl ServerState {
     /// * inform the client of if the task ended in success or failure, and
     /// * update the server's count of currently running filters
     pub fn handle_task_result(&mut self, mon_res: MonitorResult) -> Result<(), ServerError> {
-        let (thread_id, result) = mon_res;
+        let MonitorResult { thread, result } = mon_res;
 
-        let monitor = match self.running_tasks.remove(&thread_id) {
+        let monitor = match self.running_tasks.remove(&thread) {
             Some(m) => m,
             // This would be very odd: there is a thread in the server supposedly running a
             // monitor, but that monitor does not exist.
@@ -304,9 +304,9 @@ impl ServerState {
         self.filters_count.sub_assign(&monitor.task.get_transformations());
 
         let msg_to_client = match result {
+            Ok(bytes_in_out) => MessageToClient::Concluded(bytes_in_out),
+            Err(MonitorError::PipelineExitStatusError(_)) => MessageToClient::RequestError,
             Err(_) => MessageToClient::RequestInitError,
-            Ok(exit_status) if exit_status.success() => MessageToClient::Concluded,
-            Ok(_) => MessageToClient::RequestError
         };
 
         let client_pid = monitor.task.client_pid;

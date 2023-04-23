@@ -87,7 +87,7 @@ fn main() {
                 }
             }
             MessageToServer::Monitor(res) => {
-                let t_id = res.0;
+                let t_id = res.thread;
                 let cl_pid = match server_state.client_pid_from_monitor_id(&t_id) {
                     None => {
                         log::error!("message received from nonexistent monitor!");

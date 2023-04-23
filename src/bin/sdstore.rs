@@ -68,7 +68,10 @@ fn main() {
         };
         log::info!("{msg}");
 
-        if msg == MessageToClient::Concluded || msg == MessageToClient::RequestError { break }
+        match &msg {
+            MessageToClient::Pending | MessageToClient::Processing => continue,
+            _ => break
+        }
     }
 
     log::info!("Exiting!");

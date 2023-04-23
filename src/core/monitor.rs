@@ -21,8 +21,15 @@ pub enum MonitorError {
     /// A general error may occurrs after `wait`ing for the process responsible for the last
     /// step in the pipeline to finish.
     PipelineFailure(PopenError),
+
+    /// The pipeline finished, but its exit status was not that of success.
+    PipelineExitStatusError(ExitStatus),
+    /// A problem opening the input file's metadata to obtain its size.
+    InputFileMetadataError(io::Error),
+    /// A problem opening the output file's metadata to obtain its size.
+    OutputFileMetadataError(io::Error),
     /// Failed to inform the server of pipeline completion via the sending end of an `mpsc::channel`
-    MpscSenderError
+    MpscSenderError,
 }
 
 pub struct Monitor {
@@ -36,15 +43,20 @@ pub struct Monitor {
     thread: Thread,
 }
 
+/// Information returned by a monitor on a successful return.
+///
+/// Size of the input and output files in bytes.
+pub type MonitorSuccess = (u64, u64);
+
 /// Result type of a monitor. It'll return:
 ///
-/// * the thread ID of the monitor assigned to the task
-/// * the PID of the client which submitted the task
-/// * either the `ExitStatus` of the the pipeline, or a `MonitorError`.
-
-pub type ClientPid = u32;
-
-pub type MonitorResult = (ThreadId, Result<ExitStatus, MonitorError>);
+/// * the thread ID of the monitor assigned to the task, and
+///   * either the `ExitStatus` of the the pipeline and the total of bytes read/written,
+///   * or a `MonitorError`.
+pub struct MonitorResult {
+    pub thread: ThreadId,
+    pub result: Result<MonitorSuccess, MonitorError>
+}
 
 impl Monitor {
     pub fn build(
@@ -136,9 +148,31 @@ fn start_pipeline_monitor(
     }
     .map_err(|err| { MonitorError::PipelineFailure(err) });
 
+    let result = match result {
+        Ok(status) if status.success() => {
+            let (bytes_in, bytes_out): (u64, u64) = (
+                match fs::metadata(task.input_filepath()) {
+                    Err(err) => return Err(MonitorError::InputFileMetadataError(err)),
+                    Ok(meta) => meta.len()
+                },
+                match fs::metadata(task.output_filepath()) {
+                    Err(err) => return Err(MonitorError::OutputFileMetadataError(err)),
+                    Ok(meta) => meta.len()
+                },
+            );
+            Ok((bytes_in, bytes_out))
+        },
+        Ok(status) => Err(MonitorError::PipelineExitStatusError(status)),
+        Err(err) => Err(err)
+    };
 
-    let thread_id = thread::current().id();
-    let result = messaging::MessageToServer::Monitor((thread_id, result));
+    let thread = thread::current().id();
+    let monitor_result = MonitorResult {
+        thread,
+        result
+    };
+
+    let result = messaging::MessageToServer::Monitor(monitor_result);
 
     sender.send(result).map_err(|_| MonitorError::MpscSenderError)
 }

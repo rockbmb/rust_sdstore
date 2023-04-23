@@ -21,19 +21,17 @@ pub enum MessageToClient {
     /// The request has been assigned to a `Monitor`, as has begun processing
     Processing,
     /// The request was sucessfully completed
-    ///
-    /// TODO: included bytes in/out stats from monitor
-    Concluded
+    Concluded((u64, u64))
 }
 
 impl Display for MessageToClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            Self::RequestInitError => write!(f, "the request started, but failed. check server logs for information"),
-            Self::RequestError     => write!(f, "the request failed to start. check server logs for information"),
+            Self::RequestInitError => write!(f, "the request failed to start. check server logs for information"),
+            Self::RequestError     => write!(f, "the request started, but failed. check server logs for information"),
             Self::Pending          => write!(f, "pending"),
             Self::Processing       => write!(f, "processing"),
-            Self::Concluded        => write!(f, "concluded"),
+            Self::Concluded((i, o)) => write!(f, "concluded (bytes-input: {}, bytes-output: {})", i, o),
         }
     }
 }

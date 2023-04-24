@@ -2,6 +2,57 @@ use rust_sdstore::core::messaging::{self, MessageToClient};
 
 use std::{env, process, os::unix::net::UnixDatagram, fs};
 
+/// After the cliend executes a `./sdstore status` command, this function
+/// does what is required to receive and output the reply from the server.
+fn status_msg(listener: &UnixDatagram) {
+    let mut buf = [0; 1024];
+    let n = listener.recv(&mut buf).unwrap_or_else(|err| {
+        log::error!("Could not read from UdSocket. Error: {:?}", err);
+        process::exit(1);
+    });
+    match bincode::deserialize::<String>(&buf[..n]) {
+        Err(err) => log::warn!("Error deserializing message from socket: {:?}", err),
+        Ok(status) => log::info!("{status}"),
+    };
+}
+
+/// If the client submits an `./sdstore proc-file` request, this function is used
+/// to process the server's replies.
+///
+/// The client must loop over a blocking `UnixDatagram` read until the server notifies
+/// it that its request either finished, or failed.
+///
+/// If neither happens, the client will deadlock.
+///
+/// # TODO
+/// This loop only breaks if the client receives an error from the socket, or
+/// its request is concluded.
+///
+/// Otherwise, it'll hang forever. This can be fixed with a timeout thread.
+fn proc_file_msg(listener: &UnixDatagram) {
+    let mut buf = [0; 64];
+    loop {
+        let n = listener.recv(&mut buf).unwrap_or_else(|err| {
+            log::error!("Could not read from UdSocket. Error: {:?}", err);
+            process::exit(1);
+        });
+        let msg: MessageToClient = match bincode::deserialize(&buf[..n]) {
+            Err(err) => {
+                log::warn!("Error deserializing message from socket: {:?}", err);
+                log::warn!("Moving on to next message");
+                break;
+            },
+            Ok(val) => val,
+        };
+        log::info!("{msg}");
+
+        match &msg {
+            MessageToClient::Pending | MessageToClient::Processing => continue,
+            _ => break
+        }
+    }
+}
+
 fn main() {
     rust_sdstore::util::init_logging_infrastructure(
         None, 
@@ -49,43 +100,10 @@ fn main() {
 
     match &request {
         messaging::ClientRequest::Status(_) => {
-            let mut buf = [0; 1024];
-            let n = listener.recv(&mut buf).unwrap_or_else(|err| {
-                log::error!("Could not read from UdSocket. Error: {:?}", err);
-                process::exit(1);
-            });
-            match bincode::deserialize::<String>(&buf[..n]) {
-                Err(err) => log::warn!("Error deserializing message from socket: {:?}", err),
-                Ok(status) => log::info!("{status}"),
-            };
+            status_msg(&listener)
         },
         messaging::ClientRequest::ProcFile(_) => {
-            let mut buf = [0; 64];
-            // TODO:
-            // This loop only breaks if the client receives an error from the socket, or
-            // its request is concluded.
-            //
-            // Otherwise, it'll hang forever. This can be fixed with a timeout thread.
-            loop {
-                let n = listener.recv(&mut buf).unwrap_or_else(|err| {
-                    log::error!("Could not read from UdSocket. Error: {:?}", err);
-                    process::exit(1);
-                });
-                let msg: MessageToClient = match bincode::deserialize(&buf[..n]) {
-                    Err(err) => {
-                        log::warn!("Error deserializing message from socket: {:?}", err);
-                        log::warn!("Moving on to next message");
-                        break;
-                    },
-                    Ok(val) => val,
-                };
-                log::info!("{msg}");
-        
-                match &msg {
-                    MessageToClient::Pending | MessageToClient::Processing => continue,
-                    _ => break
-                }
-            }
+            proc_file_msg(&listener)
         }
     }
 

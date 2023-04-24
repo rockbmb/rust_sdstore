@@ -47,30 +47,45 @@ fn main() {
     });
     log::info!("sdstore: wrote\n{:?} to UdSocket", request);
 
-    let mut buf = [0; 64];
-    // TODO:
-    // This loop only breaks if the client receives an error from the socket, or
-    // its request is concluded.
-    //
-    // Otherwise, it'll hang forever. This can be fixed with a timeout thread.
-    loop {
-        let n = listener.recv(&mut buf).unwrap_or_else(|err| {
-            log::error!("Could not read from UdSocket. Error: {:?}", err);
-            process::exit(1);
-        });
-        let msg: MessageToClient = match bincode::deserialize(&buf[..n]) {
-            Err(err) => {
-                log::warn!("Error deserializing message from socket: {:?}", err);
-                log::warn!("Moving on to next message");
-                break;
-            },
-            Ok(val) => val,
-        };
-        log::info!("{msg}");
-
-        match &msg {
-            MessageToClient::Pending | MessageToClient::Processing => continue,
-            _ => break
+    match &request {
+        messaging::ClientRequest::Status(_) => {
+            let mut buf = [0; 1024];
+            let n = listener.recv(&mut buf).unwrap_or_else(|err| {
+                log::error!("Could not read from UdSocket. Error: {:?}", err);
+                process::exit(1);
+            });
+            match bincode::deserialize::<String>(&buf[..n]) {
+                Err(err) => log::warn!("Error deserializing message from socket: {:?}", err),
+                Ok(status) => log::info!("{status}"),
+            };
+        },
+        messaging::ClientRequest::ProcFile(_) => {
+            let mut buf = [0; 64];
+            // TODO:
+            // This loop only breaks if the client receives an error from the socket, or
+            // its request is concluded.
+            //
+            // Otherwise, it'll hang forever. This can be fixed with a timeout thread.
+            loop {
+                let n = listener.recv(&mut buf).unwrap_or_else(|err| {
+                    log::error!("Could not read from UdSocket. Error: {:?}", err);
+                    process::exit(1);
+                });
+                let msg: MessageToClient = match bincode::deserialize(&buf[..n]) {
+                    Err(err) => {
+                        log::warn!("Error deserializing message from socket: {:?}", err);
+                        log::warn!("Moving on to next message");
+                        break;
+                    },
+                    Ok(val) => val,
+                };
+                log::info!("{msg}");
+        
+                match &msg {
+                    MessageToClient::Pending | MessageToClient::Processing => continue,
+                    _ => break
+                }
+            }
         }
     }
 

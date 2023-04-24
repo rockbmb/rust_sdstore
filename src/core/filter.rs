@@ -1,4 +1,4 @@
-use std::{hash::Hash, str::FromStr};
+use std::{hash::Hash, str::FromStr, fmt::Display};
 
 use serde::{Serialize, Deserialize};
 
@@ -16,6 +16,20 @@ pub enum Filter {
     Gdecompress,
     Encrypt,
     Decrypt
+}
+
+impl Display for Filter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Filter::Nop => write!(f, "nop"),
+            Filter::Bcompress => write!(f, "bcompress"),
+            Filter::Bdecompress => write!(f, "bdecompress"),
+            Filter::Gcompress => write!(f, "gcompress"),
+            Filter::Gdecompress => write!(f, "gdecompress"),
+            Filter::Encrypt => write!(f, "encrypt"),
+            Filter::Decrypt => write!(f, "decrypt"),
+        }
+    }
 }
 
 /// Enum for errors gotten while parsing each filter from the client's user input.
@@ -38,19 +52,5 @@ impl FromStr for Filter {
         };
 
         Ok(res)
-    }
-}
-
-impl ToString for Filter {
-    fn to_string(&self) -> String {
-        match self {
-            Filter::Nop => String::from("nop"),
-            Filter::Bcompress => String::from("bcompress"),
-            Filter::Bdecompress => String::from("bdecompress"),
-            Filter::Gcompress => String::from("gcompress"),
-            Filter::Gdecompress => String::from("gdecompress"),
-            Filter::Encrypt => String::from("encrypt"),
-            Filter::Decrypt => String::from("decrypt"),
-        }
     }
 }

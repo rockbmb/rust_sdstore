@@ -75,8 +75,13 @@ fn main() {
             Ok(t) => t
         };
         match msg {
-            MessageToServer::Client(ClientRequest::Status) => {
-                // TODO: return server status to client
+            MessageToServer::Client(ClientRequest::Status(client_pid)) => {
+                log::info!("status request by client PID {client_pid}");
+                match server_state.fmt_client_status(&server_config, client_pid) {
+                    Err(err) =>
+                        log::warn!("failed to sever status request by client PID {client_pid} with error {:?}", err),
+                    _ => log::trace!("served status request to client PID {client_pid}"),
+                };
             }
             MessageToServer::Client(ClientRequest::ProcFile(task)) => {
                 let client_pid = task.client_pid;

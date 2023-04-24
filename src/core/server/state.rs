@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, thread::{self, ThreadId, JoinHandle}, io,
+    collections::HashMap, thread::{self, ThreadId, JoinHandle}, fmt::Write, io,
     sync::{mpsc::{Receiver, Sender, self}, Arc},
     os::unix::net::UnixDatagram, path::PathBuf, ops::{SubAssign, AddAssign},
 };
@@ -13,7 +13,7 @@ use crate::core::{
     monitor::{Monitor, MonitorResult, MonitorError, MonitorBuildError, MonitorSuccess},
     messaging::{self, MessageToClient, MessageToServer, ClientRequest}};
 
-use super::config::ServerConfig;
+use super::config::{ServerConfig, FiltersConfig};
 
 /// Type of the closure used to spawn the socket listener.
 pub type UdSocketListener = Box<dyn FnOnce() -> () + Send + 'static>;
@@ -88,6 +88,8 @@ pub enum ServerError {
 
     /// Failed to spawn the monitor to whom a client's task would be assigned.
     MonitorSpawnError(MonitorBuildError),
+    /// When formatting a status message `String`, an error occurred.
+    StatusFmtError(std::fmt::Error)
 }
 
 impl From<BincodeError> for ServerError {
@@ -99,6 +101,12 @@ impl From<BincodeError> for ServerError {
 impl From<MonitorBuildError> for ServerError {
     fn from(err: MonitorBuildError) -> Self {
         Self::MonitorSpawnError(err)
+    }
+}
+
+impl From<std::fmt::Error> for ServerError {
+    fn from(err: std::fmt::Error) -> Self {
+        Self::StatusFmtError(err)
     }
 }
 
@@ -312,6 +320,34 @@ impl ServerState {
             .map(drop)
             .map_err(|err| ServerError::UdSocketWriteError(err))
     }
+
+    /// Create a `String` message representing the server's state, including
+    /// * currently running client requests
+    /// * the server's currently running tranformations, and their limits specified
+    ///   in the its configuration
+    /// and send it to the requester.
+    pub fn fmt_client_status(&self, config: &ServerConfig, client_pid: u32) -> Result<(), ServerError> {
+        let mut output = String::new();
+        let mut sorted_mons = self
+            .running_tasks
+            .values()
+            .collect::<Vec<_>>();
+        sorted_mons
+            .sort_by(|mon1, mon2| { mon1.task_number.cmp(&mon2.task_number) });
+
+        for monitor in sorted_mons {
+            fmt_running_task(monitor, &mut output)?;
+        }
+        fmt_filters(&self.filters_count, &config.filters_config, &mut output)?;
+
+        let destination = self.get_udsock_dest(client_pid);
+        let bytes = bincode::serialize(&output)?;
+        self
+            .udsocket
+            .send_to(&bytes, destination)
+            .map(drop)
+            .map_err(|err| ServerError::UdSocketWriteError(err))
+    }
 }
 
 /// Convert the result of a pipeline sent by its responsible monitor to a message
@@ -332,4 +368,48 @@ fn mon_res_to_cl_msg(result: Result<MonitorSuccess, MonitorError>) -> MessageToC
             } 
         }
     }
+}
+
+/// Format a single task into the status message that'll be sent to the client.
+///
+/// The end result will be:
+///
+/// `task #<num>: proc-file <priority> <input-file> <output-file> <filter_1> <filter_2> ... <filter_n>`
+fn fmt_running_task(
+    monitor: &Monitor,
+    output: &mut String
+) -> Result<(), std::fmt::Error> {
+    write!(
+        output,
+        "task #{}: proc-file {} {} {}",
+        monitor.task_number,
+        monitor.task.priority,
+        monitor.task.input_filepath().display(),
+        monitor.task.output_filepath().display(),
+    )?;
+
+    for transformation in &monitor.task.transformations {
+        write!(output, " {}", transformation)?;
+    }
+
+    write!(output, "\n")
+}
+
+/// Format filters into the string that will be shown to the client upon
+/// their request of the server's status.
+///
+/// It'll show currently running filters vs. the server's limits specified in the
+/// config parsed from CLI on start-up.
+fn fmt_filters(
+    running: &RunningFilters,
+    config: &FiltersConfig,
+    output: &mut String
+) -> Result<(), std::fmt::Error> {
+    writeln!(output, "transformation nop: {}/{} (running/max)", running.nop, config.nop)?;
+    writeln!(output, "transformation bcompress: {}/{} (running/max)", running.bcompress, config.bcompress)?;
+    writeln!(output, "transformation bdecompress: {}/{} (running/max)", running.bdecompress, config.bdecompress)?;
+    writeln!(output, "transformation gcompress: {}/{} (running/max)", running.gcompress, config.gcompress)?;
+    writeln!(output, "transformation gdecompress: {}/{} (running/max)", running.gdecompress, config.gdecompress)?;
+    writeln!(output, "transformation encrypt: {}/{} (running/max)", running.encrypt, config.encrypt)?;
+    writeln!(output, "transformation decrypt: {}/{} (running/max)", running.decrypt, config.decrypt)
 }

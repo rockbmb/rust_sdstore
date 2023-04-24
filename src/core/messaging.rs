@@ -50,8 +50,10 @@ pub enum MessageToServer {
 ///   filters listed in the request.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum ClientRequest {
-    /// Corresponds to `./sdtore status`
-    Status,
+    /// Corresponds to `./sdtore status`.
+    ///
+    /// This `u32` value is the PID of the client wishing to be informed.
+    Status(u32),
     /// Corresponds to `./sdstore proc-file <priority> <input-file> <output-file> [filters]`
     ProcFile(ClientTask)
 }
@@ -77,7 +79,7 @@ impl ClientRequest {
         };
 
         match command.as_str() {
-            "status" => return Ok(Self::Status),
+            "status" => return Ok(Self::Status(client_pid)),
             "proc-file" => {}
             _  => return Err(ClientReqParseError::IncorrectCommandProvided),
         };
@@ -132,7 +134,7 @@ mod tests {
             .split_ascii_whitespace()
             .map(str::to_string);
 
-        assert_eq!(ClientRequest::build(args, 0).unwrap(), ClientRequest::Status);
+        assert!(matches!(ClientRequest::build(args, 0).unwrap(), ClientRequest::Status(_)));
     }
 
     #[test]

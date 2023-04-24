@@ -38,14 +38,16 @@ pub enum MonitorError {
 }
 
 pub struct Monitor {
-    /// Client request the monitor is responsible for
-    pub task: client_task::ClientTask,
     /// Numbering of the task, provided by the server. For `Display` purposes.
     /// Only assigned after the task begins execution, not after the server receives
     /// and schedules it.
-    task_number: usize,
-    /// Thread responsible for executing the pipeline
+    pub task_number: usize,
+
+    /// Thread responsible for executing the pipeline contained in the task
     thread: Thread,
+
+    /// Client request the monitor is responsible for.
+    pub task: client_task::ClientTask,
 }
 
 /// Information returned by a monitor on a successful return.

@@ -167,6 +167,26 @@ impl ServerState {
         )
     }
 
+    /// Use the server's `UnixDatagram` to send a message to a client identified by its PID.
+    ///
+    /// `bincode::serialize` is used to encode the message, which requires `serde`'s derivable traits.
+    pub fn send_msg_to_client<T>(
+        &self,
+        client_pid: u32,
+        message: &T
+    ) -> Result<(), ServerError>
+    where T: ?Sized + serde::Serialize,
+    {
+            let destination = self.get_udsock_dest(client_pid);
+            let bytes = bincode::serialize(&message)?;
+
+            self
+                .udsocket
+                .send_to(&bytes, destination)
+                .map(drop)
+                .map_err(|err| ServerError::UdSocketWriteError(err))
+    }
+
     /// Create a new instance of `ServerState`, assuming an initialized `UnixDatagram`,
     /// and given intended the path to the server's socket,
     /// but creating new inter-thread `mpsc::channel`s.
@@ -218,15 +238,8 @@ impl ServerState {
         let prio = task.priority;
         self.task_pqueue.push(task, prio);
 
-        let destination = self.get_udsock_dest(client_pid);
         let msg_to_client = MessageToClient::Pending;
-
-        let bytes = bincode::serialize(&msg_to_client)?;
-        self
-            .udsocket
-            .send_to(&bytes, destination)
-            .map(drop)
-            .map_err(|err| ServerError::UdSocketWriteError(err))
+        self.send_msg_to_client(client_pid, &msg_to_client)
     }
 
     /// Attempt to remove the highest priority task in the queue.
@@ -266,14 +279,9 @@ impl ServerState {
         server_config: &ServerConfig,
         task: ClientTask
     ) -> Result<(ThreadId, usize), ServerError> {
-            let destination = self.get_udsock_dest(task.client_pid);
             let msg_to_client = MessageToClient::Processing;
 
-            let bytes = bincode::serialize(&msg_to_client)?;
-            match self.udsocket.send_to(&bytes, destination) {
-                Err(err) => return Err(ServerError::UdSocketWriteError(err)),
-                _ => {}
-            };
+            self.send_msg_to_client(task.client_pid, &msg_to_client)?;
 
             // update server's limits with new task's counts.
             self.filters_count.add_assign(&task.transformations);
@@ -312,13 +320,7 @@ impl ServerState {
         let msg_to_client = mon_res_to_cl_msg(result);
 
         let client_pid = monitor.task.client_pid;
-        let destination = self.get_udsock_dest(client_pid);
-        let bytes = bincode::serialize(&msg_to_client)?;
-        self
-            .udsocket
-            .send_to(&bytes, destination)
-            .map(drop)
-            .map_err(|err| ServerError::UdSocketWriteError(err))
+        self.send_msg_to_client(client_pid, &msg_to_client)
     }
 
     /// Create a `String` message representing the server's state, including
@@ -327,7 +329,7 @@ impl ServerState {
     ///   in the its configuration
     /// and send it to the requester.
     pub fn fmt_client_status(&self, config: &ServerConfig, client_pid: u32) -> Result<(), ServerError> {
-        let mut output = String::new();
+        let mut status_msg = String::new();
         let mut sorted_mons = self
             .running_tasks
             .values()
@@ -336,17 +338,11 @@ impl ServerState {
             .sort_by(|mon1, mon2| { mon1.task_number.cmp(&mon2.task_number) });
 
         for monitor in sorted_mons {
-            fmt_running_task(monitor, &mut output)?;
+            fmt_running_task(monitor, &mut status_msg)?;
         }
-        fmt_filters(&self.filters_count, &config.filters_config, &mut output)?;
+        fmt_filters(&self.filters_count, &config.filters_config, &mut status_msg)?;
 
-        let destination = self.get_udsock_dest(client_pid);
-        let bytes = bincode::serialize(&output)?;
-        self
-            .udsocket
-            .send_to(&bytes, destination)
-            .map(drop)
-            .map_err(|err| ServerError::UdSocketWriteError(err))
+        self.send_msg_to_client(client_pid, &status_msg)
     }
 }
 

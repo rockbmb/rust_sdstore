@@ -81,6 +81,9 @@ pub enum ServerError {
     /// Notice that `UnixDatagram::send_to` returning "`0` bytes written" could also
     /// be an error, but it is not handled.
     UdSocketWriteError(io::Error),
+    /// The messages sent by the server are never empty, but `0` bytes were somehow
+    /// written into the Unix datagram socket.
+    UdSocket0BytesWritten,
     /// Could not serialize a message to be sent through the unix domain socket.
     MsgSerializeError(BincodeError),
     /// Could not deserialize a message read from the unix domain socket.
@@ -180,11 +183,14 @@ impl ServerState {
             let destination = self.get_udsock_dest(client_pid);
             let bytes = bincode::serialize(&message)?;
 
-            self
+            match self
                 .udsocket
                 .send_to(&bytes, destination)
-                .map(drop)
-                .map_err(|err| ServerError::UdSocketWriteError(err))
+            {
+                Err(err) => Err(ServerError::UdSocketWriteError(err)),
+                Ok(0) => Err(ServerError::UdSocket0BytesWritten),
+                _ => Ok(())
+            }
     }
 
     /// Create a new instance of `ServerState`, assuming an initialized `UnixDatagram`,

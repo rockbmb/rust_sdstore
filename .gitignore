@@ -2,6 +2,6 @@
 /target
 /Cargo.lock
 *.o
-/tmp
-/in
-/out
+tests/tmp
+tests/in
+tests/out

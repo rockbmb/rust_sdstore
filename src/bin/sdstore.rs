@@ -12,7 +12,7 @@ fn status_msg(listener: &UnixDatagram) {
     });
     match bincode::deserialize::<String>(&buf[..n]) {
         Err(err) => log::warn!("Error deserializing message from socket: {:?}", err),
-        Ok(status) => log::info!("{status}"),
+        Ok(status) => log::info!("Server current status is: \n{status}"),
     };
 }
 
@@ -68,7 +68,11 @@ fn main() {
     let udsock_dir = std::env::current_dir().unwrap_or_else(|err| {
             log::error!("Could not get pwd. Error {:?}", err);
             process::exit(1);
-        }).join("tmp");
+        })
+        .parent()
+        // TODO: fix this unwrap
+        .unwrap()
+        .join("tmp");
     log::info!("dir to be used for udsock is {:?}", udsock_dir);
 
     let client_udsock = udsock_dir.join(format!("sdstore_{}.sock", client_pid));

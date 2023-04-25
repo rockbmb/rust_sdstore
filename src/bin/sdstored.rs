@@ -35,7 +35,8 @@ fn main() {
         process::exit(1);
     });
     // Init socket file
-    let udsock_dir = curr_dir.join("tmp");
+    // TODO: fix this unwrap
+    let udsock_dir = curr_dir.parent().unwrap().join("tmp");
     log::info!("dir to be used for udsock is {:?}", udsock_dir);
 
     // Init the Unix domain socket

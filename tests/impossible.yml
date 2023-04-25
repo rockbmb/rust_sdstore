@@ -1,0 +1,9 @@
+name: impossible
+
+# Expected result: the server refuses the request for exceeding its
+# concurrently running filter limit for `gcompress` in `tests/config.txt`
+windows:
+  - priority:
+      panes:
+        - cargo run --bin sdstored tests/config.txt bin/
+        - sleep 2; cargo run --bin sdstore proc-file 1 in/filein1 out/fileout1 gcompress gcompress gcompress gcompress

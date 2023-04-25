@@ -1,0 +1,12 @@
+name: priority
+
+# Expected result: that the first request will run first, and the others
+# will block until it finishes.
+# After that, the highest priority request will run.
+windows:
+  - priority:
+      panes:
+        - cargo run --bin sdstored tests/config.conf bin/
+        - sleep 1; cargo run --bin sdstore proc-file 1 in/filein1 out/fileout1 nop nop nop nop nop nop bcompress
+        - sleep 2; cargo run --bin sdstore proc-file 3 in/filein2 out/fileout2 nop bcompress gcompress gcompress
+        - sleep 3; cargo run --bin sdstore proc-file 5 in/filein3 out/fileout3 nop bcompress gcompress gcompress

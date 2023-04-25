@@ -1,0 +1,11 @@
+name: ctrl_c
+
+windows:
+  - priority:
+      panes:
+        # For this test, it's crucial to send a `CTRL+C` signal to the first pane, to stop the server.
+        # Afterwards, the fourth pane's client must be run to assert it can no longer submit its request
+        - cargo run --bin sdstore tests/config.txt bin/
+        - sleep 1; cargo run --bin sdstore proc-file 1 in/filein1 out/fileout1 bcompress bcompress nop nop nop nop nop nop
+        - sleep 1; cargo run --bin sdstore proc-file 3 in/filein2 out/fileout2 bcompress gcompress encrypt decrypt gdecompress bdecompress
+        - sleep 2; RED='\033[0;31m'; BLUEBG='\033[0;104m'; NC='\033[0m'; cargo run --bin sdstore status; echo -e "${BLUEBG}CTRL^C IN SERVER${NC}"; echo -e "${RED}RUN cargo run --bin sdstore proc-file 1 filein1 fileout1 bcompress bcompress nop nop nop nop nop nop${NC}"

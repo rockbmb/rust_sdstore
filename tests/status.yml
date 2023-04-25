@@ -1,0 +1,20 @@
+name: status
+
+# Expected result: that the client will display the following information:
+#
+# task #_: proc-file 1 in/filein1 out/fileout1 nop nop bcompress encrypt decrypt bdecompress
+# task #_: proc-file 1 in/filein2 out/fileout2 bcompress gcompress encrypt decrypt gdecompress bdecompress
+# transformation nop: 2/6 (running/max)
+# transformation bcompress: 2/4 (running/max)
+# transformation bdecompress: 2/4 (running/max)
+# transformation encrypt: 2/3 (running/max)
+# transformation decrypt: 2/3 (running/max)
+# transformation gcompress: 1/2 (running/max)
+# transformation gdecompress: 1/2 (running/max)
+windows:
+  - priority:
+      panes:
+        - cargo run --bin sdstored tests/config.txt bin/
+        - sleep 1; cargo run --bin sdstore proc-file 1 in/filein1 out/fileout1 nop nop bcompress encrypt decrypt bdecompress
+        - sleep 1; cargo run --bin sdstore proc-file 1 in/filein2 out/fileout2 bcompress gcompress encrypt decrypt gdecompress bdecompress
+        - sleep 2; cargo run --bin sdstore status
